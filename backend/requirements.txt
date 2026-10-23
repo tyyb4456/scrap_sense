@@ -3,10 +3,16 @@ langchain
 langchain-core
 langchain-openai
 deepagents
-pydantic
 pydantic[email]
 pydantic-settings
 python-dotenv
 fastapi
 uvicorn[standard]
 alembic
+asyncpg
+sqlalchemy[asyncio]
+pytest
+pytest-asyncio
+httpx
+ruff
+mypy
