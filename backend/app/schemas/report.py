@@ -75,6 +75,28 @@ class AnomalyVerdict(BaseModel):
     confidence: float = Field(ge=0.0, le=1.0, default=1.0)
 
 
+class FinalReport(BaseModel):
+    """A validated report guaranteed to have the required sale fields."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    picker_id: str
+    raw_text: str
+    material: str
+    price_per_kg: Decimal
+    quantity_kg: Decimal
+    currency: str
+    city: str | None
+    area: str | None
+    confidence: float | None
+    is_anomalous: bool
+    anomaly_reason: str
+    anomaly_method: str
+    status: Literal["accepted", "flagged"]
+    created_at: datetime
+
+
 class LLMJudgment(BaseModel):
     """Schema the LLM judge fills in."""
     is_anomalous: bool

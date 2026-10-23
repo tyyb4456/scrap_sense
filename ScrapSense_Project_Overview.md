@@ -133,8 +133,8 @@ There's no existing dataset for "fair scrap prices by material and region" — i
 - **ML:** PyTorch (CNN), scikit-learn (Isolation Forest)
 - **Frontend:** React + TypeScript + Vite, Clerk-authenticated chat UI; voice-first remains
   the target given the literacy/connectivity constraints
-- **Data:** PostgreSQL-backed LangGraph checkpoints and long-term store today; structured
-  seed prices and accumulated reports are still to be wired in
+- **Data:** PostgreSQL-backed LangGraph checkpoints, long-term store, and finalized report
+  rows today; structured seed prices and market aggregation are still to be wired in
 
 ---
 
@@ -153,8 +153,10 @@ There's no existing dataset for "fair scrap prices by material and region" — i
   memory, the intake subagent, and the price tool wired in
 - ✅ `backend/app/api/routes/chat.py` — `POST /api/v1/chat`, the only picker-facing endpoint,
   protected by Clerk auth
-- ✅ `backend/app/workflows/pipeline.py` — LLM extraction + deterministic validation and the
-  graph wiring for the anomaly stages
+- ✅ `backend/app/workflows/pipeline.py` — LLM extraction + deterministic validation, the
+  graph wiring for the anomaly stages, and final-report persistence
+- ✅ `backend/app/services/reports.py` — finalized reports stored in the PostgreSQL
+  `reports` table
 - ✅ `backend/app/tools/price_estimator.py` — typed placeholder, tested
 - ✅ `backend/app/api/routes/health.py` — liveness and database readiness
 - ✅ PostgreSQL persistence — `AsyncPostgresSaver` checkpoints and `AsyncPostgresStore`
@@ -164,8 +166,7 @@ There's no existing dataset for "fair scrap prices by material and region" — i
   `anomaly_agent.py`, Isolation Forest, or trained model exists
 - ⬜ Price estimator — returns `0.0`/zero confidence; no seed data or fallback chain yet
 - ⬜ Classifier agent — not present, not even a stub module
-- ⬜ Report/market data store — chat state is persisted, but reports have no application
-  table or repository yet
+- ⬜ Market data aggregation — stored reports are not yet aggregated into price references
 
 ---
 
@@ -197,6 +198,6 @@ rather than hidden:
   `/memories/picker_notes.md` contents. There is no encryption-at-rest policy yet.
 - **No deletion path.** A picker cannot erase their chat history or the notes the
   main agent writes to `/memories/picker_notes.md`.
-- **No market data persistence.** Reports are not stored outside the chat checkpoint, so
-  nothing currently feeds price references; the estimator returns a placeholder `0.0`.
+- **No market data aggregation.** Finalized reports are stored, but nothing yet aggregates
+  them into price references; the estimator returns a placeholder `0.0`.
 - **No retention policy.** Checkpoints and memories accumulate until someone removes them.

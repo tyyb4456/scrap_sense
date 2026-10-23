@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
+from uuid import uuid4
 
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage
 
-from app.schemas.report import LLMJudgment, ReportDraft
+from app.schemas.report import AnomalyVerdict, FinalReport, LLMJudgment, ReportDraft
 from app.workflows import pipeline as pipeline_module
 
 
@@ -30,6 +32,55 @@ def valid_draft() -> ReportDraft:
         quantity_kg=Decimal("2"),
         city="Multan",
     )
+
+
+def final_report(
+    draft: ReportDraft,
+    verdict: AnomalyVerdict,
+    *,
+    picker_id: str = "user_123",
+    raw_text: str = "sold 2kg copper at 500 per kg",
+) -> FinalReport:
+    return FinalReport(
+        id=uuid4(),
+        picker_id=picker_id,
+        raw_text=raw_text,
+        material=draft.material or "",
+        price_per_kg=draft.price_per_kg or Decimal("0"),
+        quantity_kg=draft.quantity_kg or Decimal("0"),
+        currency=draft.currency,
+        city=draft.city,
+        area=draft.area,
+        confidence=draft.confidence,
+        is_anomalous=verdict.is_anomalous,
+        anomaly_reason=verdict.reason,
+        anomaly_method=verdict.method,
+        status="flagged" if verdict.is_anomalous else "accepted",
+        created_at=datetime.now(UTC),
+    )
+
+
+def patch_save_report(
+    monkeypatch: pytest.MonkeyPatch,
+    captured: dict[str, Any] | None = None,
+) -> None:
+    async def fake_save_report(
+        *,
+        picker_id: str,
+        raw_text: str,
+        draft: ReportDraft,
+        verdict: AnomalyVerdict,
+    ) -> FinalReport:
+        if captured is not None:
+            captured.update(
+                picker_id=picker_id,
+                raw_text=raw_text,
+                draft=draft,
+                verdict=verdict,
+            )
+        return final_report(draft, verdict, picker_id=picker_id, raw_text=raw_text)
+
+    monkeypatch.setattr(pipeline_module, "save_report", fake_save_report)
 
 
 def test_report_draft_extracts_structured_details(
@@ -136,15 +187,61 @@ async def test_pipeline_accepts_a_valid_report(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(pipeline_module, "_extraction_model", lambda: FakeModel(valid_draft()))
+    patch_save_report(monkeypatch)
     graph = pipeline_module.build_pipeline()
 
     result = await graph.ainvoke(
-        {"messages": [HumanMessage(content="sold 2kg copper at 500 per kg")]}
+        {"messages": [HumanMessage(content="sold 2kg copper at 500 per kg")]},
+        {"configurable": {"thread_id": "user_123"}},
     )
 
     assert result["report_draft"].material == "copper"
     assert result["verdict"].is_anomalous is False
-    assert "accepted" in result["messages"][-1].content.lower()
+    assert "saved" in result["messages"][-1].content.lower()
+    assert result["structured_response"].picker_id == "user_123"
+
+
+async def test_finalize_report_persists_the_report(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+    patch_save_report(monkeypatch, captured)
+    draft = valid_draft()
+    verdict = pipeline_module.AnomalyVerdict(
+        is_anomalous=False,
+        reason="Price is within range.",
+        method="rules",
+        confidence=1.0,
+    )
+
+    result = await pipeline_module.finalize_report_node(
+        {
+            "messages": [HumanMessage(content="sold 2kg copper at 500 per kg")],
+            "report_draft": draft,
+            "verdict": verdict,
+        },
+        {"configurable": {"thread_id": "picker-42"}},
+    )
+
+    assert captured["picker_id"] == "picker-42"
+    assert captured["draft"] == draft
+    assert captured["verdict"] == verdict
+    assert result["final_report"].material == "copper"
+    assert result["structured_response"] == result["final_report"]
+    assert "saved" in result["messages"][0].content.lower()
+
+
+async def test_finalize_report_skips_an_incomplete_draft() -> None:
+    result = await pipeline_module.finalize_report_node(
+        {
+            "messages": [HumanMessage(content="sold copper")],
+            "report_draft": ReportDraft(material="copper"),
+        },
+        {"configurable": {"thread_id": "picker-42"}},
+    )
+
+    assert "final_report" not in result
+    assert "could not build" in result["messages"][0].content.lower()
 
 
 async def test_pipeline_asks_for_clarification(
@@ -159,4 +256,5 @@ async def test_pipeline_asks_for_clarification(
     )
 
     assert "verdict" not in result
+    assert "final_report" not in result
     assert "price per kg" in result["messages"][-1].content

@@ -1,5 +1,5 @@
 """
-Report-to-verdict pipeline workflow for ScrapSense.
+Report-to-final-report pipeline workflow for ScrapSense.
 
 Graph structure:
 
@@ -13,7 +13,10 @@ Graph structure:
                                                   |      v           v
                                                   |   llm_check    accept
                                                   |      |           |
-                                                  +--> END <---------+
+                                                  |      +-----+-----+
+                                                  |            |
+                                                  |            v
+                                                  +-->    finalize_report -> END
 """
 
 from __future__ import annotations
@@ -22,11 +25,13 @@ import logging
 from typing import Any
 
 from langchain.chat_models import init_chat_model
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, START, StateGraph
 
 from app.core.config import get_settings
 from app.schemas.report import AnomalyVerdict, LLMJudgment, ReportDraft
+from app.services.reports import save_report
 from app.workflows.state import PipelineState
 
 logger = logging.getLogger(__name__)
@@ -204,21 +209,26 @@ def llm_check_node(state: PipelineState) -> dict[str, Any]:
     return {"verdict": verdict}
 
 
-def accept_node(state: PipelineState) -> dict[str, Any]:
+def _resolve_verdict(state: PipelineState) -> AnomalyVerdict:
     verdict = state.get("verdict")
-    if verdict is None:
-        deterministic = state.get("deterministic_result")
-        ml = state.get("ml_result")
-        flagged = next(
-            (
-                result
-                for result in (deterministic, ml)
-                if result is not None and result.is_anomalous
-            ),
-            None,
-        )
-        verdict = flagged or _neutral_verdict("deterministic")
+    if verdict is not None:
+        return verdict
 
+    deterministic = state.get("deterministic_result")
+    ml = state.get("ml_result")
+    flagged = next(
+        (
+            result
+            for result in (deterministic, ml)
+            if result is not None and result.is_anomalous
+        ),
+        None,
+    )
+    return flagged or _neutral_verdict("deterministic")
+
+
+def accept_node(state: PipelineState) -> dict[str, Any]:
+    verdict = _resolve_verdict(state)
     draft = state.get("report_draft")
     summary = (
         f"Report accepted for {draft.material}."
@@ -231,6 +241,68 @@ def accept_node(state: PipelineState) -> dict[str, Any]:
     logger.info("Accepting report with verdict=%s", verdict.model_dump())
     return {
         "verdict": verdict,
+        "messages": [AIMessage(content=summary)],
+    }
+
+
+async def finalize_report_node(
+    state: PipelineState,
+    config: RunnableConfig,
+) -> dict[str, Any]:
+    """Build and persist the final report, then expose it to the parent agent."""
+    draft = state.get("report_draft")
+    if draft is None or _missing_fields(draft):
+        return {
+            "messages": [AIMessage(content="Could not build a final report.")]
+        }
+
+    verdict = _resolve_verdict(state)
+    messages = state.get("messages") or []
+    raw_text = next(
+        (
+            str(message.content)
+            for message in messages
+            if isinstance(message, HumanMessage) and message.content
+        ),
+        "",
+    )
+    configurable = config.get("configurable") or {}
+    thread_id = configurable.get("thread_id")
+    picker_id = thread_id if isinstance(thread_id, str) and thread_id else "unknown"
+
+    try:
+        final_report = await save_report(
+            picker_id=picker_id,
+            raw_text=raw_text,
+            draft=draft,
+            verdict=verdict,
+        )
+    except Exception:
+        logger.exception("Failed to persist final report")
+        return {
+            "messages": [
+                AIMessage(
+                    content=(
+                        "I extracted the sale details but could not save the report. "
+                        "Please try again."
+                    )
+                )
+            ]
+        }
+
+    summary = (
+        f"Final report saved for {final_report.material}: "
+        f"{final_report.quantity_kg} kg at "
+        f"{final_report.price_per_kg} {final_report.currency}/kg."
+    )
+    if final_report.is_anomalous:
+        summary = f"{summary} Flagged: {final_report.anomaly_reason}"
+
+    logger.info("Saved final report %s for picker %s", final_report.id, picker_id)
+    return {
+        "verdict": verdict,
+        "final_report": final_report,
+        "structured_response": final_report,
         "messages": [AIMessage(content=summary)],
     }
 
@@ -260,6 +332,7 @@ def build_pipeline():
     graph.add_node("ml_check", ml_check_node)
     graph.add_node("llm_check", llm_check_node)
     graph.add_node("accept", accept_node)
+    graph.add_node("finalize_report", finalize_report_node)
 
     graph.add_edge(START, "report_draft")
     graph.add_edge("report_draft", "validate_and_build")
@@ -279,8 +352,9 @@ def build_pipeline():
         route_after_ml,
         {"llm_check": "llm_check", "accept": "accept"},
     )
-    graph.add_edge("llm_check", END)
-    graph.add_edge("accept", END)
+    graph.add_edge("llm_check", "finalize_report")
+    graph.add_edge("accept", "finalize_report")
+    graph.add_edge("finalize_report", END)
 
     return graph.compile(name="scrap_report_pipeline")
 

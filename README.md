@@ -15,13 +15,14 @@ Included:
 - A coordinator agent that delegates sale reports to the report-intake subagent
 - An LLM extraction step plus deterministic validation in the intake pipeline
 - Placeholder anomaly checks (deterministic and ML tiers return neutral verdicts)
+- Final reports persisted to the PostgreSQL `reports` table
 - A placeholder price-estimator tool
 - A React chat UI with sign-in and persisted history
 - Liveness and database-readiness endpoints
 
 Not included yet:
 
-- Persistent report storage or a real market data store
+- Market-price aggregation from stored reports or a real market data store
 - Trained anomaly models, the LLM anomaly tier being enabled by default, or forecasting
 - The material classifier CNN
 - Reporter reputation or contributor programs
@@ -36,10 +37,12 @@ backend/
     auth/                Clerk request verification and dependencies
     core/                Environment-driven settings
     db/                  SQLAlchemy engine and session factory
+    models/              SQLAlchemy models, including finalized reports
     schemas/             Chat, price, and report schemas
+    services/            Report persistence
     tools/               Price-estimator tool used by the main agent
     workflows/           Intake/anomaly LangGraph pipeline and state
-  alembic/               Migration environment for future application tables
+  alembic/               Migration environment for application tables
   tests/                 Unit and API tests
   run.py                 Dev server runner with a psycopg-compatible event loop
 frontend/
@@ -60,6 +63,7 @@ docker compose up -d db
 Set-Location backend
 Copy-Item .env.example .env
 uv sync
+uv run alembic upgrade head
 uv run python run.py
 ```
 
@@ -100,8 +104,8 @@ variable, such as `OPENAI_API_KEY`.
 `anthropic:claude-sonnet-4-6`.
 
 The Docker defaults are development-only. Change `POSTGRES_PASSWORD` and keep `backend/.env` in
-sync. The database is required: LangGraph creates its checkpoint and store tables on first chat
-request.
+sync. The database is required: run `uv run alembic upgrade head` to create the application
+tables, and LangGraph creates its checkpoint and store tables on first chat request.
 
 ## Endpoints
 
@@ -153,4 +157,5 @@ npm run build
   deletion endpoint yet.
 - The price estimator always returns `0.0` with zero confidence until real seed data exists.
 - The anomaly tier checks are neutral placeholders, so every valid report is accepted.
-- Reports are not persisted outside the chat checkpoint; there is no market data table yet.
+- Reports are stored in PostgreSQL, but price estimation does not use them until market
+  aggregation is built.

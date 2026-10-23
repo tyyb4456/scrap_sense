@@ -8,7 +8,7 @@ from typing import NotRequired
 
 from langgraph.graph import MessagesState
 
-from app.schemas.report import AnomalyVerdict, ReportDraft
+from app.schemas.report import AnomalyVerdict, FinalReport, ReportDraft
 
 
 class PipelineState(MessagesState):
@@ -16,3 +16,5 @@ class PipelineState(MessagesState):
     deterministic_result: NotRequired[AnomalyVerdict | None]
     ml_result: NotRequired[AnomalyVerdict | None]
     verdict: NotRequired[AnomalyVerdict | None]
+    final_report: NotRequired[FinalReport | None]
+    structured_response: NotRequired[FinalReport | None]

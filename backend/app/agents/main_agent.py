@@ -6,9 +6,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from contextlib import AsyncExitStack
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 from deepagents import create_deep_agent
 from deepagents.backends import CompositeBackend, StateBackend, StoreBackend
@@ -16,6 +15,9 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.store.base import BaseStore
 from langgraph.store.postgres.aio import AsyncPostgresStore
+from psycopg import AsyncConnection
+from psycopg.rows import dict_row
+from psycopg_pool import AsyncConnectionPool
 
 from app.agents.report_intaker import scrap_pipeline_agent
 from app.core.config import Settings, get_settings
@@ -79,13 +81,13 @@ def build_agent(
 
 
 _agent: Any = None
-_resources: AsyncExitStack | None = None
+_pool: AsyncConnectionPool[AsyncConnection[dict[str, Any]]] | None = None
 _lock = asyncio.Lock()
 
 
 async def aget_agent() -> Any:
-    """Open Postgres persistence and build the agent on first use."""
-    global _agent, _resources
+    """Open the shared Postgres pool and build the agent on first use."""
+    global _agent, _pool
 
     if _agent is not None:
         return _agent
@@ -95,19 +97,27 @@ async def aget_agent() -> Any:
             return _agent
 
         settings = get_settings()
-        stack = AsyncExitStack()
-        await stack.__aenter__()
+        pool = cast(
+            AsyncConnectionPool[AsyncConnection[dict[str, Any]]],
+            AsyncConnectionPool(
+                conninfo=settings.postgres_uri,
+                max_size=10,
+                open=False,
+                kwargs={
+                    "autocommit": True,
+                    "prepare_threshold": 0,
+                    "row_factory": dict_row,
+                },
+            ),
+        )
+        await pool.open()
 
         try:
-            store = await stack.enter_async_context(
-                AsyncPostgresStore.from_conn_string(settings.postgres_uri)
-            )
-            await store.setup()
-
-            checkpointer = await stack.enter_async_context(
-                AsyncPostgresSaver.from_conn_string(settings.postgres_uri)
-            )
+            checkpointer = AsyncPostgresSaver(pool)
             await checkpointer.setup()
+
+            store = AsyncPostgresStore(pool)
+            await store.setup()
 
             agent = build_agent(
                 settings=settings,
@@ -115,23 +125,23 @@ async def aget_agent() -> Any:
                 checkpointer=checkpointer,
             )
         except BaseException:
-            await stack.aclose()
+            await pool.close()
             raise
 
-        _resources = stack
+        _pool = pool
         _agent = agent
-        logger.info("Deep agent initialized successfully.")
+        logger.info("Deep agent initialized successfully with a shared Postgres pool.")
         return _agent
 
 
 async def aclose_agent() -> None:
-    """Close the Postgres pools when the application shuts down."""
-    global _agent, _resources
+    """Close the shared Postgres pool when the application shuts down."""
+    global _agent, _pool
 
     async with _lock:
-        if _resources is not None:
-            await _resources.aclose()
-        _resources = None
+        if _pool is not None:
+            await _pool.close()
+        _pool = None
         _agent = None
 
 
