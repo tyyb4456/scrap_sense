@@ -1,8 +1,11 @@
 langgraph
+langgraph-checkpoint-postgres
 langchain
 langchain-core
 langchain-openai
 deepagents
+psycopg[binary,pool]
+
 pydantic[email]
 pydantic-settings
 python-dotenv
@@ -11,6 +14,8 @@ uvicorn[standard]
 alembic
 asyncpg
 sqlalchemy[asyncio]
+clerk-backend-api
+
 pytest
 pytest-asyncio
 httpx

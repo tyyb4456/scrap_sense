@@ -1,3 +1,1 @@
-from app.models.report import Report, ReportStatus
-
-__all__ = ["Report", "ReportStatus"]
+"""Database models are not part of the current in-memory agent architecture."""

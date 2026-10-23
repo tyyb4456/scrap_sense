@@ -83,6 +83,8 @@ Two request types, two paths, converging on a shared data store.
 | **Price-estimator agent** | Fallback chain: local reports → city-wide reports → manually-collected seed price, blended by how much real data exists. Pure math. | No |
 | **Classifier agent (secondary)** | Identifies material from a photo when a picker is unsure. Wraps a trained CNN. | No |
 
+§9 tracks which of these agents exist in code today versus which are still design targets.
+
 ### Why not full LLM autonomy?
 
 Considered and deliberately rejected. Every deterministic step above (anomaly Tiers 1–2, the price estimator, the classifier) is either arithmetic or a trained model doing a forward pass — asking an LLM to do that instead makes it slower, costlier, and dependent on a live connection, for zero accuracy benefit. Given the target user has unreliable connectivity and no money to spend on API calls on their behalf, an "LLM does everything" architecture doesn't just cost more — it stops working in the field for the exact person it's meant to help.
@@ -110,12 +112,12 @@ There's no existing dataset for "fair scrap prices by material and region" — i
 - **Ongoing:** picker-submitted reports accumulate the real dataset the anomaly ML tier and eventual forecasting model depend on
 - **Cold-start problem to design around:** the app is only useful once enough pickers are reporting. Worth seeding the hackathon demo with a small set of realistic hardcoded reports rather than relying on live adoption during the build window
 
-> **TODO (week-1 field data):** `app/data/seed_prices.json` currently records only a
-> `source` string per material (and `range`/`price_per_kg`). It has **no
-> collected-on date and no collector field**, so freshness and provenance cannot
-> be audited. When real week-1 field data replaces it, every entry must carry an
-> explicit **source**, **collection date**, and **collector** — do not invent
-> values for the placeholder data in the meantime.
+> **TODO (week-1 field data):** there is no seed price file in the repository yet.
+> The price-estimator tool currently returns `0.0` with zero confidence. When real
+> week-1 data is collected, store it at `app/data/seed_prices.json` and give every
+> entry an explicit **source**, **collection date**, and **collector** alongside
+> `range`/`price_per_kg`, so freshness and provenance can be audited. Do not invent
+> placeholder prices in the meantime.
 
 ### Privacy notes
 - Location stored at neighborhood/city level only — never precise GPS
@@ -129,8 +131,10 @@ There's no existing dataset for "fair scrap prices by material and region" — i
 - **Backend:** FastAPI, Python 3.11+
 - **Orchestration:** LangGraph
 - **ML:** PyTorch (CNN), scikit-learn (Isolation Forest)
-- **Frontend:** plain HTML/JS, voice-first given the literacy/connectivity constraints
-- **Data:** structured JSON/DB — seed prices, accumulated reports
+- **Frontend:** React + TypeScript + Vite, Clerk-authenticated chat UI; voice-first remains
+  the target given the literacy/connectivity constraints
+- **Data:** PostgreSQL-backed LangGraph checkpoints and long-term store today; structured
+  seed prices and accumulated reports are still to be wired in
 
 ---
 
@@ -145,14 +149,23 @@ There's no existing dataset for "fair scrap prices by material and region" — i
 
 ## 9. What's Already Built (as of this document)
 
-- ✅ `report_intake_agent.py` — LLM extraction + deterministic validation, tested
-- ✅ `anomaly_agent.py` — three-tier detection (deterministic / ML / LLM), toggleable, tested
-- ✅ `ml_anomaly_model.py` — Isolation Forest training + scoring, tested
-- ✅ `price_estimator_agent.py` — fallback chain + data-driven price range, tested
-- ⬜ Classifier agent — only a stub exists (mock backend, no real CNN trained yet)
-- ⬜ Orchestrator — not yet built
-- ⬜ Real data store / repository backend — currently an in-memory mock for testing
-- ⬜ Frontend
+- ✅ `backend/app/agents/main_agent.py` — coordinator Deep Agent with per-Clerk-user
+  memory, the intake subagent, and the price tool wired in
+- ✅ `backend/app/api/routes/chat.py` — `POST /api/v1/chat`, the only picker-facing endpoint,
+  protected by Clerk auth
+- ✅ `backend/app/workflows/pipeline.py` — LLM extraction + deterministic validation and the
+  graph wiring for the anomaly stages
+- ✅ `backend/app/tools/price_estimator.py` — typed placeholder, tested
+- ✅ `backend/app/api/routes/health.py` — liveness and database readiness
+- ✅ PostgreSQL persistence — `AsyncPostgresSaver` checkpoints and `AsyncPostgresStore`
+  memory, initialized on first chat request
+- ✅ Frontend chat UI — Clerk sign-in plus a chat view for the endpoint
+- ⬜ Anomaly agent — the deterministic and ML nodes return neutral verdicts; no
+  `anomaly_agent.py`, Isolation Forest, or trained model exists
+- ⬜ Price estimator — returns `0.0`/zero confidence; no seed data or fallback chain yet
+- ⬜ Classifier agent — not present, not even a stub module
+- ⬜ Report/market data store — chat state is persisted, but reports have no application
+  table or repository yet
 
 ---
 
@@ -160,42 +173,30 @@ There's no existing dataset for "fair scrap prices by material and region" — i
 
 - Who specifically will provide week-1 seed data — which dealers/pickers, in what area of Multan?
 - Cold-start: how will the demo simulate report volume that wouldn't realistically exist yet in a live app?
-- **Demo data is synthetic.** `backend/scripts/seed_demo_reports.py` writes
-  scoring-demo intake rows under `demo-seed-*` reporter ids and prints a
-  **SYNTHETIC DEMO DATA** banner. It is for exercising the estimator tiers and
-  the review queue only — never market truth, and never a substitute for week-1
-  field data.
-- Decide, based on real comparison data from `compare_modes()`, whether the LLM anomaly tier is worth its cost once enough reports exist to judge it fairly
-- Orchestrator's offline gap-analysis loop still needs to be designed and built
+- There is no demo-data seeding script in the repository today; any future demo data must
+  be clearly marked synthetic and is never market truth or a substitute for week-1 field data
+- Decide, based on real comparison data, whether the LLM anomaly tier is worth its cost once
+  enough reports exist to judge it fairly
+- The coordinator's offline gap-analysis loop still needs to be designed and built
 
 ---
 
-## 11. Known Privacy Gaps (v2 intake reports)
+## 11. Known Privacy And Data Gaps
 
-The v2 intake-report path hashes reporter identifiers and transaction ids before
-storage. The following gaps remain and are tracked honestly rather than hidden:
+Chat is now authenticated, but the current path still has gaps that are tracked honestly
+rather than hidden:
 
-- **No authentication.** `reporter_identifier` on `POST /transactions` is
-  client-supplied and spoofable; chat's `user_id` is an anonymous installation
-  scope, not a verified identity. Real binding arrives with channel/auth work.
-- **Raw source text is still stored.** `transactions.source_text` keeps the
-  original message verbatim, which may itself contain a name, phone number or
-  precise address. The v2 intake table does not remove it.
-- **Delete-by-reporter is partial.** `delete_by_reporter(reporter_id)` erases
-  matching `intake_reports` rows only. Matching `transactions` and `reviews`
-  (and checkpoints) are not erased by it.
-- **Known-area table is a placeholder.** `app/data/known_areas.json` is seeded
-  for development; unknown text stays in `location`/`area_raw` only when it
-  passes the short/non-address/non-coordinate rule.
-- **No key management.** The HMAC secret comes from a single environment
-  variable with no rotation, versioning or per-tenant key support. Generate it
-  once with `python -c "import secrets; print(secrets.token_hex(32))"`, back it
-  up, and **never rotate it**: rotating changes every `reporter_id` and
-  submission hash, so existing records stop matching new ones. The app now fails
-  fast at startup when the variable is unset.
-- **Rejecting an auto-accepted report is a no-op.** The review→intake sync only
-  moves `pending`/`flagged` intake rows. A report the pipeline auto-accepted
-  (`needs_review=False`) stays `accepted` even if a human later rejects the
-  transaction, so a human-rejected report can keep feeding price references. A
-  later phase must let a reviewer override an auto-accepted report and remove it
-  from the qualifying set.
+- **Clerk owns identity.** Chat's picker id and conversation thread id come from the Clerk
+  `sub` claim, so a client cannot choose another user's scope. Reviewer/role separation
+  remains future work.
+- **Raw source text reaches the model provider.** `POST /api/v1/chat` sends the
+  picker's message verbatim to the configured LLM; the message may contain a
+  name, phone number or precise address.
+- **Conversation history and agent memory are persisted.** LangGraph checkpoints and the
+  long-term store live in PostgreSQL, so a database compromise exposes chat history and
+  `/memories/picker_notes.md` contents. There is no encryption-at-rest policy yet.
+- **No deletion path.** A picker cannot erase their chat history or the notes the
+  main agent writes to `/memories/picker_notes.md`.
+- **No market data persistence.** Reports are not stored outside the chat checkpoint, so
+  nothing currently feeds price references; the estimator returns a placeholder `0.0`.
+- **No retention policy.** Checkpoints and memories accumulate until someone removes them.
