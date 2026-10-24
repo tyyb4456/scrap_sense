@@ -22,6 +22,7 @@ from psycopg_pool import AsyncConnectionPool
 from app.agents.report_intaker import scrap_pipeline_agent
 from app.core.config import Settings, get_settings
 from app.tools.price_estimator import estimate_price
+from app.llm import build_xkiro_llm
 
 logger = logging.getLogger(__name__)
 
@@ -66,9 +67,9 @@ def build_agent(
         },
     )
 
-    logger.info("Initializing ScrapSense deep agent with model %s", settings.ai_model)
+    logger.info("Initializing ScrapSense deep agent with model %s", settings.xkiro_model)
     return create_deep_agent(
-        model=settings.ai_model,
+        model=build_xkiro_llm(settings=settings),
         system_prompt=SYSTEM_PROMPT,
         subagents=[scrap_pipeline_agent],
         tools=[estimate_price],

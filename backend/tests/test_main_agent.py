@@ -32,7 +32,7 @@ def test_build_agent_wires_postgres_resources(
     monkeypatch.setattr(main_agent, "create_deep_agent", fake_create_deep_agent)
 
     agent = main_agent.build_agent(
-        settings=Settings(ai_model="openai:test-model"),
+        settings=Settings(xkiro_model="test-model"),
         store=store,
         checkpointer=checkpointer,
     )

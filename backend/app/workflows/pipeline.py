@@ -24,12 +24,12 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from langchain.chat_models import init_chat_model
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, START, StateGraph
 
 from app.core.config import get_settings
+from app.llm import build_xkiro_llm
 from app.schemas.report import AnomalyVerdict, LLMJudgment, ReportDraft
 from app.services.reports import save_report
 from app.workflows.state import PipelineState
@@ -37,10 +37,17 @@ from app.workflows.state import PipelineState
 logger = logging.getLogger(__name__)
 
 settings = get_settings()
-model = init_chat_model(settings.ai_model)
 
+_model = None
 _structured_extraction_model = None
 _structured_llm_judge = None
+
+
+def _chat_model():
+    global _model
+    if _model is None:
+        _model = build_xkiro_llm(settings=settings)
+    return _model
 
 EXTRACTION_PROMPT = """
 Extract the scrap sale details from the picker's message below.
@@ -69,14 +76,14 @@ Give a short reason and a confidence between 0 and 1.
 def _extraction_model():
     global _structured_extraction_model
     if _structured_extraction_model is None:
-        _structured_extraction_model = model.with_structured_output(ReportDraft)
+        _structured_extraction_model = _chat_model().with_structured_output(ReportDraft)
     return _structured_extraction_model
 
 
 def _judge_model():
     global _structured_llm_judge
     if _structured_llm_judge is None:
-        _structured_llm_judge = model.with_structured_output(LLMJudgment)
+        _structured_llm_judge = _chat_model().with_structured_output(LLMJudgment)
     return _structured_llm_judge
 
 

@@ -1,18 +1,11 @@
-import pytest
-from pydantic import ValidationError
-
 from app.core.config import Settings
 
 
-def test_ai_model_requires_provider_prefix() -> None:
-    with pytest.raises(ValidationError):
-        Settings(ai_model="gpt-4.1-mini")
+def test_xkiro_defaults_are_configured() -> None:
+    settings = Settings()
 
-
-def test_ai_model_accepts_provider_model() -> None:
-    settings = Settings(ai_model="openai:gpt-4.1-mini")
-
-    assert settings.ai_model == "openai:gpt-4.1-mini"
+    assert settings.xkiro_base_url == "https://api.xkiro.com/v1"
+    assert settings.xkiro_model
 
 
 def test_postgres_uri_strips_asyncpg_driver() -> None:

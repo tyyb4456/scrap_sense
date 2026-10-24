@@ -2,7 +2,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field, SecretStr, field_validator
+from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BACKEND_DIR = Path(__file__).resolve().parents[2]
@@ -24,7 +24,11 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+asyncpg://scrapsense:scrapsense@localhost:5432/scrapsense"
     database_echo: bool = False
 
-    ai_model: str = "openai:gpt-4.1-mini"
+    xkiro_api_key: SecretStr | None = None
+
+    xkiro_base_url: str = "https://api.xkiro.com/v1"
+    xkiro_model: str = "mistralai/mistral-large-2512"
+    
     use_llm_reasoning: bool = False
 
     cors_origins: list[str] = Field(default_factory=lambda: ["http://localhost:5173"])
@@ -38,13 +42,6 @@ class Settings(BaseSettings):
     def postgres_uri(self) -> str:
         """Return a Psycopg-compatible URI for LangGraph persistence."""
         return self.database_url.replace("+asyncpg", "")
-
-    @field_validator("ai_model")
-    @classmethod
-    def validate_ai_model(cls, value: str) -> str:
-        if ":" not in value:
-            raise ValueError("ai_model must use the provider:model format")
-        return value
 
 
 @lru_cache

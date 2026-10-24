@@ -97,12 +97,12 @@ without a valid bearer token and `503` when no Clerk credential is configured.
 
 ## Configuration
 
-Settings are loaded from `backend/.env` and environment variables. Provider API keys are not
-stored in application settings; the LangChain model provider reads its standard environment
-variable, such as `OPENAI_API_KEY`.
+Settings are loaded from `backend/.env` and environment variables. All LLM calls go through
+xKiro, an OpenAI-compatible gateway. Configure it with:
 
-`AI_MODEL` must use the `provider:model` format, for example `openai:gpt-4.1-mini` or
-`anthropic:claude-sonnet-4-6`.
+- `XKIRO_API_KEY` — your xKiro key (required; never commit it).
+- `XKIRO_BASE_URL` — defaults to `https://api.xkiro.com/v1`.
+- `XKIRO_MODEL` — the xKiro model id, for example `mistralai/mistral-large-2512`.
 
 The Docker defaults are development-only. Change `POSTGRES_PASSWORD` and keep `backend/.env` in
 sync. The database is required: run `uv run alembic upgrade head` to create the application
