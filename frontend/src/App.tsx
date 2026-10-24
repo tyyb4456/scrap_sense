@@ -39,28 +39,28 @@ function BootScreen() {
 
 function SampleLedger() {
   return (
-    <div className="rounded-[10px] border border-line bg-surface">
-      <div className="flex items-center justify-between gap-3 border-b border-rule px-4 py-3">
+    <div className="clay-card">
+      <div className="flex items-center justify-between gap-3 px-5 pb-1 pt-4">
         <div className="flex items-center gap-2">
-          <span className="h-1.5 w-1.5 rounded-full bg-ink" aria-hidden="true" />
+          <span className="h-1.5 w-1.5 rounded-full bg-accent" aria-hidden="true" />
           <p className="text-[13px] font-medium text-ink">Example reports</p>
         </div>
         <p className="text-[13px] text-muted">Illustration only</p>
       </div>
 
-      <ul className="divide-y divide-rule">
+      <ul className="space-y-2 px-3 py-3">
         {sampleRows.map((row) => (
-          <li key={row.material} className="flex items-center gap-3 px-4 py-3.5">
+          <li key={row.material} className="clay-row flex items-center gap-3 px-3.5 py-3">
             <div className="min-w-0 flex-1">
               <p className="text-[14px] font-medium leading-5 text-ink">{row.material}</p>
               <p className="mt-0.5 text-[13px] leading-4 text-muted">{row.detail}</p>
             </div>
-            <p className="num shrink-0 font-mono text-[13px] leading-5 text-accent">{row.paid}</p>
+            <p className="num shrink-0 font-mono text-[13px] leading-5 text-accent-text">{row.paid}</p>
           </li>
         ))}
       </ul>
 
-      <div className="border-t border-rule px-4 py-3">
+      <div className="px-5 pb-5 pt-1">
         <p className="text-[13px] leading-5 text-muted">
           Reports are checked before they count toward a price reference. These rows are sample
           entries, not a quote.
@@ -80,7 +80,7 @@ function Landing() {
           <SignInButton mode="modal">
             <button
               type="button"
-              className="h-9 rounded-[6px] border border-control bg-surface px-3 text-[13px] font-medium text-ink transition-colors hover:bg-raised active:bg-active"
+              className="clay-button clay-button-secondary h-11 px-4 text-[13px] font-medium text-ink sm:h-9 sm:px-3.5"
             >
               Sign in
             </button>
@@ -108,10 +108,10 @@ function Landing() {
             <SignInButton mode="modal">
               <button
                 type="button"
-                className="group mt-8 flex h-11 items-center gap-2 rounded-[6px] bg-solid px-4 text-[13px] font-medium text-on-solid transition-colors hover:bg-solid-hover active:bg-solid-active"
+                className="clay-button clay-button-primary group mt-8 flex h-11 items-center gap-2 px-4 text-[13px] font-medium text-on-solid"
               >
                 Sign in to start a report
-                <ArrowRightIcon className="h-4 w-4 transition-transform group-hover:translate-x-0.5" />
+                <ArrowRightIcon className="cta-arrow h-4 w-4" />
               </button>
             </SignInButton>
 

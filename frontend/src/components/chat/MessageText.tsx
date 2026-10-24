@@ -6,7 +6,7 @@ interface MessageTextProps {
 const numericPattern =
   /((?:Rs\.?|PKR|₨)\s?\d[\d,]*(?:\.\d+)?|\d[\d,]*(?:\.\d+)?\s?(?:kg|kilos?|kilo|grams?|g|rupay|rupees?|rs)\b)/gi
 
-export function MessageText({ text, tone }: MessageTextProps) {
+export function MessageText({ text }: MessageTextProps) {
   const parts = text.split(numericPattern)
 
   return (
@@ -15,9 +15,7 @@ export function MessageText({ text, tone }: MessageTextProps) {
         index % 2 === 1 ? (
           <span
             key={`${index}-${part}`}
-            className={`font-mono text-[0.93em] tracking-[-0.01em] tabular-nums ${
-              tone === 'user' ? 'text-on-solid-accent' : 'text-accent'
-            }`}
+            className="font-mono text-[0.93em] tracking-[-0.01em] tabular-nums text-accent-text"
           >
             {part}
           </span>

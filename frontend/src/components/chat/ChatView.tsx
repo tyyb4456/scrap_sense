@@ -97,7 +97,7 @@ function SidebarContent({
             type="button"
             onClick={onClose}
             aria-label="Close conversations"
-            className="-mr-1 flex h-10 w-10 shrink-0 items-center justify-center rounded-[6px] text-muted transition-colors hover:bg-hover hover:text-ink"
+            className="clay-icon-button -mr-1 flex h-11 w-11 shrink-0 items-center justify-center text-muted hover:text-ink"
           >
             <CloseIcon className="h-4 w-4" />
           </button>
@@ -109,7 +109,7 @@ function SidebarContent({
           type="button"
           onClick={onNewChat}
           disabled={busy}
-          className="group flex h-10 w-full items-center justify-between rounded-[6px] bg-solid px-3 text-[13px] font-medium text-on-solid transition-colors hover:bg-solid-hover active:bg-solid-active disabled:cursor-not-allowed disabled:opacity-50"
+          className="clay-button clay-button-primary group flex h-11 w-full items-center justify-between px-3.5 text-[13px] font-medium text-on-solid lg:h-10 lg:px-3"
         >
           <span className="flex items-center gap-2">
             <PlusIcon className="h-4 w-4" />
@@ -131,14 +131,14 @@ function SidebarContent({
             value={search}
             onChange={(event) => onSearch(event.target.value)}
             placeholder="Search reports"
-            className="h-9 w-full rounded-[6px] border border-line bg-surface pl-9 pr-8 text-[12px] text-ink outline-none transition-colors placeholder:text-faint focus:border-ink"
+            className="clay-input h-12 w-full pl-9 pr-12 text-[12px] text-ink placeholder:text-faint lg:h-9 lg:pr-8"
           />
           {search ? (
             <button
               type="button"
               onClick={() => onSearch('')}
               aria-label="Clear search"
-              className="absolute right-1.5 top-1/2 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-[4px] text-muted transition-colors hover:bg-raised hover:text-ink"
+              className="search-clear absolute right-0.5 top-1/2 flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-full text-muted lg:right-1 lg:h-7 lg:w-7"
             >
               <CloseIcon className="h-3.5 w-3.5" />
             </button>
@@ -167,8 +167,8 @@ function SidebarContent({
                         onClick={() => onSelectThread(thread.id)}
                         disabled={busy}
                         aria-current={active ? 'true' : undefined}
-                        className={`flex w-full flex-col gap-0.5 rounded-[6px] px-2.5 py-2 text-left transition-colors disabled:cursor-not-allowed ${
-                          active ? 'bg-active' : 'hover:bg-hover'
+                        className={`clay-row flex w-full flex-col gap-0.5 px-2.5 py-2 text-left ${
+                          active ? 'clay-row-active' : ''
                         }`}
                       >
                         <span className="truncate text-[13px] font-medium leading-5 text-ink">
@@ -194,10 +194,10 @@ function SidebarContent({
         )}
       </nav>
 
-      <div className="border-t border-line px-4 py-3">
-        <div className="flex items-center gap-2.5">
+      <div className="px-3 py-3">
+        <div className="clay-surface flex items-center gap-2.5 px-3 py-2.5">
           {accountSlot ?? (
-            <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-solid text-[11px] font-medium text-on-solid">
+            <div className="clay-icon-chip flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[11px] font-medium text-accent-text">
               S
             </div>
           )}
@@ -247,7 +247,7 @@ function ThreadEmpty({
         <button
           type="button"
           onClick={onClear}
-          className="mt-1 text-[12px] font-medium leading-4 text-ink underline decoration-control underline-offset-2 transition-colors hover:decoration-ink"
+          className="mt-1 inline-flex min-h-11 items-center text-[12px] font-medium leading-4 text-ink underline decoration-control underline-offset-2 transition-colors hover:decoration-ink"
         >
           Clear search
         </button>
@@ -265,10 +265,10 @@ function ThreadEmpty({
         type="button"
         onClick={onNewChat}
         disabled={busy}
-        className="mt-3 flex items-center gap-1.5 text-[12px] font-medium leading-4 text-ink underline decoration-control underline-offset-2 transition-colors hover:decoration-ink disabled:cursor-not-allowed disabled:opacity-50"
+        className="group mt-3 flex min-h-11 items-center gap-1.5 text-[12px] font-medium leading-4 text-ink underline decoration-control underline-offset-2 transition-colors hover:decoration-ink disabled:cursor-not-allowed disabled:opacity-50"
       >
         Start a report
-        <ArrowRightIcon className="h-3.5 w-3.5" />
+        <ArrowRightIcon className="cta-arrow h-3.5 w-3.5" />
       </button>
     </div>
   )
@@ -300,7 +300,7 @@ function EmptyState({
               type="button"
               disabled={disabled}
               onClick={() => onPrompt(prompt.example)}
-              className="group flex w-full items-center gap-3 rounded-[8px] border border-line bg-surface px-3 py-3 text-left transition-colors hover:border-control hover:bg-raised active:bg-active disabled:cursor-not-allowed disabled:opacity-60"
+              className="clay-row group flex w-full items-center gap-3 px-3 py-3 text-left"
             >
               <span className="min-w-0 flex-1">
                 <span className="block truncate text-[13px] font-medium leading-5 text-ink">
@@ -310,7 +310,7 @@ function EmptyState({
                   {prompt.label}
                 </span>
               </span>
-              <ArrowRightIcon className="h-4 w-4 shrink-0 text-muted transition-transform group-hover:translate-x-0.5" />
+              <ArrowRightIcon className="cta-arrow h-4 w-4 shrink-0 text-muted" />
             </button>
           ))}
         </div>
@@ -330,22 +330,22 @@ function MessageSkeleton() {
       <span className="sr-only">Loading conversation</span>
       <div aria-hidden="true" className="space-y-6">
         <div className="flex gap-3">
-          <div className="mt-0.5 h-7 w-7 shrink-0 rounded-[6px] border border-line bg-raised" />
+          <div className="clay-icon-chip mt-0.5 h-7 w-7 shrink-0" />
           <div className="flex-1 space-y-2 pt-1">
-            <div className="h-2.5 w-20 rounded-sm bg-active" />
-            <div className="h-3 w-[86%] rounded-sm bg-active" />
-            <div className="h-3 w-[62%] rounded-sm bg-active" />
+            <div className="h-2.5 w-20 rounded-[8px] bg-active" />
+            <div className="h-3 w-[86%] rounded-[8px] bg-active" />
+            <div className="h-3 w-[62%] rounded-[8px] bg-active" />
           </div>
         </div>
         <div className="flex justify-end">
-          <div className="h-12 w-[54%] rounded-[10px] bg-active" />
+          <div className="h-12 w-[54%] rounded-[22px] bg-active" />
         </div>
         <div className="flex gap-3">
-          <div className="mt-0.5 h-7 w-7 shrink-0 rounded-[6px] border border-line bg-raised" />
+          <div className="clay-icon-chip mt-0.5 h-7 w-7 shrink-0" />
           <div className="flex-1 space-y-2 pt-1">
-            <div className="h-2.5 w-20 rounded-sm bg-active" />
-            <div className="h-3 w-[74%] rounded-sm bg-active" />
-            <div className="h-3 w-[48%] rounded-sm bg-active" />
+            <div className="h-2.5 w-20 rounded-[8px] bg-active" />
+            <div className="h-3 w-[74%] rounded-[8px] bg-active" />
+            <div className="h-3 w-[48%] rounded-[8px] bg-active" />
           </div>
         </div>
       </div>
@@ -364,12 +364,12 @@ function AssistantMessage({
 }) {
   return (
     <article className="group flex gap-3 py-3">
-      <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-[6px] border border-line bg-surface text-ink">
+      <div className="clay-icon-chip mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center text-ink">
         <TagMark className="h-3.5 w-3.5" />
       </div>
       <div className="min-w-0 flex-1">
         <p className="text-[11px] font-medium leading-4 text-muted">ScrapSense</p>
-        <div className="mt-1 max-w-[62ch] text-[14px] leading-6 text-ink sm:text-[15px] sm:leading-7">
+        <div className="clay-bubble-assistant mt-1.5 max-w-[62ch] px-4 py-3 text-[14px] leading-6 text-ink sm:text-[15px] sm:leading-7">
           <MessageText text={message.content} tone="assistant" />
         </div>
         <div className="mt-1.5 flex items-center gap-1 opacity-100 transition-opacity sm:opacity-0 sm:group-focus-within:opacity-100 sm:group-hover:opacity-100">
@@ -377,7 +377,7 @@ function AssistantMessage({
             type="button"
             onClick={() => onCopy(message)}
             aria-label={copied ? 'Copied' : 'Copy message'}
-            className="flex h-7 items-center gap-1.5 rounded-[5px] px-1.5 text-[11px] font-medium text-muted transition-colors hover:bg-raised hover:text-ink"
+            className="clay-icon-button flex h-11 items-center gap-1.5 px-3 text-[11px] font-medium text-muted hover:text-ink sm:h-7 sm:px-2"
           >
             {copied ? <CheckIcon className="h-3.5 w-3.5" /> : <CopyIcon className="h-3.5 w-3.5" />}
             {copied ? 'Copied' : 'Copy'}
@@ -392,7 +392,7 @@ function UserMessage({ message }: { message: ChatMessage }) {
   return (
     <div className="flex justify-end py-2">
       <div className="max-w-[86%] sm:max-w-[78%]">
-        <div className="rounded-[10px] rounded-br-[4px] bg-solid px-3.5 py-2.5 text-[14px] leading-6 text-on-solid sm:px-4 sm:py-3">
+        <div className="clay-bubble-user px-3.5 py-2.5 text-[14px] leading-6 text-ink sm:px-4 sm:py-3">
           <MessageText text={message.content} tone="user" />
         </div>
       </div>
@@ -403,10 +403,10 @@ function UserMessage({ message }: { message: ChatMessage }) {
 function Thinking() {
   return (
     <div className="flex gap-3 py-3" role="status">
-      <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-[6px] border border-line bg-surface text-ink">
+      <div className="clay-icon-chip mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center text-ink">
         <TagMark className="h-3.5 w-3.5" />
       </div>
-      <div className="flex items-center gap-2 pt-0.5">
+      <div className="clay-chip flex items-center gap-2 px-3 py-1.5">
         <span className="text-[11px] font-medium leading-4 text-muted">Reading your message</span>
         <span className="flex items-end gap-1" aria-hidden="true">
           <span className="typing-dot h-1 w-1 rounded-full bg-ink" />
@@ -430,14 +430,14 @@ function ErrorBanner({
   return (
     <div
       role="alert"
-      className="mb-2 flex items-center gap-2 rounded-[6px] border border-line bg-raised px-3 py-2"
+      className="clay-inset mb-2 flex items-center gap-2 px-3 py-2"
     >
       <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-negative" aria-hidden="true" />
       <p className="min-w-0 flex-1 text-[12px] leading-4 text-ink">{message}</p>
       <button
         type="button"
         onClick={onRetry}
-        className="flex shrink-0 items-center gap-1 text-[12px] font-medium leading-4 text-ink underline decoration-control underline-offset-2 transition-colors hover:decoration-ink"
+        className="flex min-h-11 shrink-0 items-center gap-1 text-[12px] font-medium leading-4 text-ink underline decoration-control underline-offset-2 transition-colors hover:decoration-ink sm:min-h-0"
       >
         Retry
         <RetryIcon className="h-3.5 w-3.5" />
@@ -446,7 +446,7 @@ function ErrorBanner({
         type="button"
         onClick={onDismiss}
         aria-label="Dismiss error"
-        className="flex h-6 w-6 shrink-0 items-center justify-center rounded-[4px] text-muted transition-colors hover:bg-surface hover:text-ink"
+        className="clay-icon-button flex h-11 w-11 shrink-0 items-center justify-center text-muted hover:text-ink sm:h-6 sm:w-6"
       >
         <CloseIcon className="h-3.5 w-3.5" />
       </button>
@@ -660,7 +660,7 @@ export function ChatView({
 
   return (
     <div className="flex h-svh overflow-hidden bg-surface">
-      <aside className="hidden h-full w-[264px] shrink-0 border-r border-line bg-ground lg:block">
+      <aside className="hidden h-full w-[264px] shrink-0 bg-ground lg:block">
         <SidebarContent
           threads={threads}
           activeThreadId={activeThreadId}
@@ -676,12 +676,12 @@ export function ChatView({
       </aside>
 
       <main className="flex min-h-0 min-w-0 flex-1 flex-col">
-        <header className="flex h-14 shrink-0 items-center gap-1 border-b border-line px-2 lg:hidden">
+        <header className="flex h-14 shrink-0 items-center gap-1.5 px-2.5 lg:hidden">
           <button
             type="button"
             onClick={() => setDrawerOpen(true)}
             aria-label="Open conversations"
-            className="flex h-11 w-11 items-center justify-center rounded-[6px] text-ink transition-colors hover:bg-raised active:bg-active"
+            className="clay-icon-button flex h-11 w-11 items-center justify-center text-ink"
           >
             <MenuIcon className="h-5 w-5" />
           </button>
@@ -695,7 +695,7 @@ export function ChatView({
             onClick={handleNewChat}
             disabled={sending}
             aria-label="New report"
-            className="flex h-11 w-11 items-center justify-center rounded-[6px] text-ink transition-colors hover:bg-raised active:bg-active disabled:cursor-not-allowed disabled:opacity-40"
+            className="clay-icon-button flex h-11 w-11 items-center justify-center text-ink"
           >
             <PlusIcon className="h-5 w-5" />
           </button>
@@ -715,7 +715,7 @@ export function ChatView({
               disabled={!activeThreadId || sending || loadingMessages}
               aria-label="Delete conversation"
               title="Delete conversation"
-              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[6px] text-muted transition-colors hover:bg-raised hover:text-ink disabled:cursor-not-allowed disabled:opacity-40"
+              className="clay-icon-button flex h-11 w-11 shrink-0 items-center justify-center text-muted hover:text-ink lg:h-9 lg:w-9"
             >
               <TrashIcon className="h-4 w-4" />
             </button>
@@ -761,7 +761,7 @@ export function ChatView({
               type="button"
               onClick={scrollToBottom}
               aria-label="Jump to the latest message"
-              className="absolute bottom-3 left-1/2 flex h-8 -translate-x-1/2 items-center gap-1.5 rounded-full border border-line bg-surface px-3 text-[11px] font-medium text-ink shadow-jump transition-colors hover:bg-raised"
+              className="clay-chip absolute bottom-3 left-1/2 flex h-11 -translate-x-1/2 items-center gap-1.5 px-4 text-[11px] font-medium text-ink sm:h-8 sm:px-3"
             >
               <ArrowDownIcon className="h-3.5 w-3.5" />
               Latest
@@ -769,14 +769,14 @@ export function ChatView({
           ) : null}
         </div>
 
-        <div className="safe-bottom shrink-0 border-t border-rule bg-surface px-5 pt-3 lg:px-8 lg:pt-4">
+        <div className="safe-bottom shrink-0 bg-surface px-5 pt-3 lg:px-8 lg:pt-4">
           <div className="mx-auto w-full max-w-[760px]">
             {error ? (
               <ErrorBanner message={error} onRetry={onRetry} onDismiss={onDismissError} />
             ) : null}
 
             <form onSubmit={handleSubmit}>
-              <div className="rounded-[10px] border border-control bg-surface transition-colors focus-within:border-ink">
+              <div className="clay-composer">
                 <label htmlFor="chat-message" className="sr-only">
                   Message
                 </label>
@@ -811,8 +811,10 @@ export function ChatView({
                     <button
                       type="submit"
                       disabled={sending || loadingMessages || draft.trim().length === 0}
+                      data-loading={sending ? 'true' : undefined}
+                      aria-busy={sending || undefined}
                       aria-label={sending ? 'Sending' : 'Send message'}
-                      className="flex h-9 w-9 items-center justify-center rounded-full bg-solid text-on-solid transition-colors hover:bg-solid-hover active:bg-solid-active disabled:cursor-not-allowed disabled:bg-active disabled:text-faint"
+                      className="clay-icon-button clay-icon-button-accent flex h-11 w-11 items-center justify-center rounded-full text-on-solid sm:h-9 sm:w-9"
                     >
                       {sending ? (
                         <span className="spinner h-4 w-4 rounded-full border-2 border-on-solid/30 border-t-on-solid" />
@@ -858,7 +860,7 @@ export function ChatView({
             aria-modal="true"
             aria-label="Conversations"
             tabIndex={-1}
-            className="drawer-panel relative flex h-full w-[88%] max-w-[320px] flex-col border-r border-line bg-ground shadow-drawer outline-none"
+            className="drawer-panel relative flex h-full w-[88%] max-w-[320px] flex-col bg-ground shadow-drawer outline-none"
           >
             <SidebarContent
               threads={threads}
@@ -892,7 +894,7 @@ export function ChatView({
             aria-modal="true"
             aria-labelledby="delete-title"
             aria-describedby="delete-copy"
-            className="dialog-panel relative w-full max-w-[400px] rounded-[10px] border border-line bg-surface p-5 shadow-dialog"
+            className="clay-card dialog-panel relative w-full max-w-[400px] p-5"
           >
             <h2
               id="delete-title"
@@ -909,7 +911,7 @@ export function ChatView({
                 ref={cancelRef}
                 type="button"
                 onClick={() => setConfirmOpen(false)}
-                className="h-9 rounded-[6px] border border-control bg-surface px-3 text-[13px] font-medium text-ink transition-colors hover:bg-raised"
+                className="clay-button clay-button-secondary h-11 px-4 text-[13px] font-medium text-ink sm:h-9 sm:px-3"
               >
                 Keep it
               </button>
@@ -917,7 +919,7 @@ export function ChatView({
                 type="button"
                 onClick={handleDelete}
                 disabled={deleting}
-                className="h-9 rounded-[6px] bg-negative px-3 text-[13px] font-medium text-on-negative transition-colors hover:bg-negative-hover disabled:cursor-not-allowed disabled:opacity-60"
+                className="clay-button clay-button-danger h-11 px-4 text-[13px] font-medium text-on-negative sm:h-9 sm:px-3"
               >
                 {deleting ? 'Deleting…' : 'Delete report'}
               </button>

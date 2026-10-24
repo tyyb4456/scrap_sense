@@ -11,9 +11,14 @@ export function ThemeToggle({ className = '' }: { className?: string }) {
       onClick={toggleTheme}
       aria-label={dark ? 'Switch to light mode' : 'Switch to dark mode'}
       title={dark ? 'Switch to light mode' : 'Switch to dark mode'}
-      className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-[6px] text-muted transition-colors hover:bg-hover hover:text-ink ${className}`}
+      className={`clay-icon-button theme-toggle flex h-11 w-11 shrink-0 items-center justify-center text-muted hover:text-ink lg:h-9 lg:w-9 ${className}`}
     >
-      {dark ? <SunIcon className="h-4 w-4" /> : <MoonIcon className="h-4 w-4" />}
+      <span className="theme-toggle-glyph" data-active={dark}>
+        <SunIcon className="h-4 w-4" />
+      </span>
+      <span className="theme-toggle-glyph" data-active={!dark}>
+        <MoonIcon className="h-4 w-4" />
+      </span>
     </button>
   )
 }

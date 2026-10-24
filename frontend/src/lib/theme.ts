@@ -32,7 +32,7 @@ function applyTheme(next: Theme) {
   root.style.colorScheme = next
   document
     .querySelector('meta[name="theme-color"]')
-    ?.setAttribute('content', next === 'dark' ? '#131312' : '#f4f3f1')
+    ?.setAttribute('content', next === 'dark' ? '#161512' : '#ECE7DD')
 }
 
 function emit() {

@@ -17,7 +17,7 @@ createRoot(document.getElementById('root')!).render(
       </ClerkProvider>
     ) : (
       <main className="flex min-h-svh items-center justify-center bg-ground px-6">
-        <div className="w-full max-w-md rounded-[10px] border border-line bg-surface p-6">
+        <div className="clay-card w-full max-w-md p-6">
           <p className="text-[11px] font-medium uppercase tracking-[0.14em] text-muted">Setup</p>
           <h1 className="mt-2 text-[22px] font-semibold tracking-[-0.02em] text-ink">
             ScrapSense needs a Clerk key
