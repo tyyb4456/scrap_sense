@@ -231,6 +231,29 @@ async def test_finalize_report_persists_the_report(
     assert "saved" in result["messages"][0].content.lower()
 
 
+async def test_finalize_report_prefers_authenticated_picker_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+    patch_save_report(monkeypatch, captured)
+
+    await pipeline_module.finalize_report_node(
+        {
+            "messages": [HumanMessage(content="sold 2kg copper at 500 per kg")],
+            "report_draft": valid_draft(),
+            "verdict": pipeline_module.AnomalyVerdict(
+                is_anomalous=False,
+                reason="Price is within range.",
+                method="rules",
+                confidence=1.0,
+            ),
+        },
+        {"configurable": {"thread_id": "thread-1", "picker_id": "user_123"}},
+    )
+
+    assert captured["picker_id"] == "user_123"
+
+
 async def test_finalize_report_skips_an_incomplete_draft() -> None:
     result = await pipeline_module.finalize_report_node(
         {

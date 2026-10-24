@@ -82,12 +82,13 @@ def build_agent(
 
 _agent: Any = None
 _pool: AsyncConnectionPool[AsyncConnection[dict[str, Any]]] | None = None
+_checkpointer: BaseCheckpointSaver | None = None
 _lock = asyncio.Lock()
 
 
 async def aget_agent() -> Any:
     """Open the shared Postgres pool and build the agent on first use."""
-    global _agent, _pool
+    global _agent, _pool, _checkpointer
 
     if _agent is not None:
         return _agent
@@ -130,19 +131,30 @@ async def aget_agent() -> Any:
 
         _pool = pool
         _agent = agent
+        _checkpointer = checkpointer
         logger.info("Deep agent initialized successfully with a shared Postgres pool.")
         return _agent
 
 
+async def aget_checkpointer() -> BaseCheckpointSaver:
+    """Return the shared checkpointer, initializing the agent if needed."""
+    if _checkpointer is None:
+        await aget_agent()
+    if _checkpointer is None:
+        raise RuntimeError("Checkpoint storage is unavailable")
+    return _checkpointer
+
+
 async def aclose_agent() -> None:
     """Close the shared Postgres pool when the application shuts down."""
-    global _agent, _pool
+    global _agent, _pool, _checkpointer
 
     async with _lock:
         if _pool is not None:
             await _pool.close()
         _pool = None
         _agent = None
+        _checkpointer = None
 
 
 if __name__ == "__main__":

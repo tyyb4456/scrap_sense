@@ -151,17 +151,20 @@ There's no existing dataset for "fair scrap prices by material and region" — i
 
 - ✅ `backend/app/agents/main_agent.py` — coordinator Deep Agent with per-Clerk-user
   memory, the intake subagent, and the price tool wired in
-- ✅ `backend/app/api/routes/chat.py` — `POST /api/v1/chat`, the only picker-facing endpoint,
-  protected by Clerk auth
+- ✅ `backend/app/api/routes/chat.py` — picker-facing chat endpoints protected by Clerk auth:
+  send, create/list threads, load history, and delete a thread
+- ✅ `backend/app/services/chat_threads.py` — server-owned conversation threads in the PostgreSQL
+  `chat_threads` table; every read/write is scoped to the authenticated picker id
 - ✅ `backend/app/workflows/pipeline.py` — LLM extraction + deterministic validation, the
   graph wiring for the anomaly stages, and final-report persistence
 - ✅ `backend/app/services/reports.py` — finalized reports stored in the PostgreSQL
-  `reports` table
+  `reports` table, attributed to the authenticated picker id rather than the thread id
 - ✅ `backend/app/tools/price_estimator.py` — typed placeholder, tested
 - ✅ `backend/app/api/routes/health.py` — liveness and database readiness
 - ✅ PostgreSQL persistence — `AsyncPostgresSaver` checkpoints and `AsyncPostgresStore`
   memory, initialized on first chat request
-- ✅ Frontend chat UI — Clerk sign-in plus a chat view for the endpoint
+- ✅ Frontend chat UI — Clerk sign-in, server-backed thread switching, new-chat creation,
+  history restoration, and thread deletion
 - ⬜ Anomaly agent — the deterministic and ML nodes return neutral verdicts; no
   `anomaly_agent.py`, Isolation Forest, or trained model exists
 - ⬜ Price estimator — returns `0.0`/zero confidence; no seed data or fallback chain yet
@@ -187,17 +190,19 @@ There's no existing dataset for "fair scrap prices by material and region" — i
 Chat is now authenticated, but the current path still has gaps that are tracked honestly
 rather than hidden:
 
-- **Clerk owns identity.** Chat's picker id and conversation thread id come from the Clerk
-  `sub` claim, so a client cannot choose another user's scope. Reviewer/role separation
-  remains future work.
+- **Clerk owns identity; threads are server-owned.** The picker id comes from the Clerk `sub`
+  claim, and each thread has a server-generated UUID stored against that picker id. Clients
+  cannot create a thread under another user or read/delete one they do not own. Reviewer/role
+  separation remains future work.
 - **Raw source text reaches the model provider.** `POST /api/v1/chat` sends the
   picker's message verbatim to the configured LLM; the message may contain a
   name, phone number or precise address.
 - **Conversation history and agent memory are persisted.** LangGraph checkpoints and the
   long-term store live in PostgreSQL, so a database compromise exposes chat history and
   `/memories/picker_notes.md` contents. There is no encryption-at-rest policy yet.
-- **No deletion path.** A picker cannot erase their chat history or the notes the
-  main agent writes to `/memories/picker_notes.md`.
+- **Thread deletion, but no memory deletion.** Deleting a thread removes its checkpoints, but the
+  per-user `/memories/picker_notes.md` is intentionally shared across that user's threads and
+  cannot be erased yet.
 - **No market data aggregation.** Finalized reports are stored, but nothing yet aggregates
   them into price references; the estimator returns a placeholder `0.0`.
 - **No retention policy.** Checkpoints and memories accumulate until someone removes them.

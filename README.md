@@ -11,7 +11,8 @@ Included:
 
 - Clerk session authentication on the frontend and backend
 - A `POST /api/v1/chat` endpoint that talks to the main ScrapSense agent
-- Per-Clerk-user conversation checkpoints and agent memory stored in PostgreSQL
+- Server-owned, per-user chat threads with persisted checkpoints and agent memory in PostgreSQL
+- Chat thread creation, listing, history loading, and deletion scoped to the signed-in user
 - A coordinator agent that delegates sale reports to the report-intake subagent
 - An LLM extraction step plus deterministic validation in the intake pipeline
 - Placeholder anomaly checks (deterministic and ML tiers return neutral verdicts)
@@ -37,9 +38,9 @@ backend/
     auth/                Clerk request verification and dependencies
     core/                Environment-driven settings
     db/                  SQLAlchemy engine and session factory
-    models/              SQLAlchemy models, including finalized reports
+    models/              SQLAlchemy models for reports and user-owned chat threads
     schemas/             Chat, price, and report schemas
-    services/            Report persistence
+    services/            Report, chat-thread, and chat-history persistence
     tools/               Price-estimator tool used by the main agent
     workflows/           Intake/anomaly LangGraph pipeline and state
   alembic/               Migration environment for application tables
@@ -117,23 +118,33 @@ Health:
 
 Chat (requires `Authorization: Bearer <Clerk session token>`):
 
-- `POST /api/v1/chat` sends one picker message to the main agent.
+- `POST /api/v1/chat` sends one picker message to the main agent. `thread_id` is optional; when it
+  is omitted the server creates a new thread and returns its id.
+- `GET /api/v1/chat/threads` lists the signed-in user's threads.
+- `POST /api/v1/chat/threads` creates a new thread.
+- `GET /api/v1/chat/threads/{thread_id}/messages` returns the stored conversation history.
+- `DELETE /api/v1/chat/threads/{thread_id}` deletes the thread and its checkpoints.
 
 ```json
 {
-  "message": "aaj maine 2 kilo plastic becha, 300 rupay mila"
+  "message": "aaj maine 2 kilo plastic becha, 300 rupay mila",
+  "thread_id": "6f1d0b0e-7d4c-4a71-9d92-0f4f4c2f6a11"
 }
 ```
 
 ```json
 {
   "user_id": "user_...",
+  "thread_id": "6f1d0b0e-7d4c-4a71-9d92-0f4f4c2f6a11",
   "reply": "..."
 }
 ```
 
-The Clerk `sub` claim is the agent's picker id and conversation thread id, so each signed-in user
-has isolated history and memory. The client cannot choose another user's identity.
+The Clerk `sub` claim is the picker id for reports and the namespace for long-term agent memory.
+Threads are server-created UUIDs stored against that picker id; every thread endpoint verifies
+ownership before reading, appending, or deleting. A client cannot choose another user's identity
+or use another user's thread id. The pipeline receives the picker id separately from the thread id,
+so a conversation id can never be mistaken for a reporter id.
 
 Interactive docs are available at `http://127.0.0.1:8000/docs`.
 
@@ -153,8 +164,9 @@ npm run build
 ## Known limitations
 
 - Submitted raw text is sent to the configured model provider.
-- Chat checkpoints and agent memory are persisted in PostgreSQL, but there is no user-facing
-  deletion endpoint yet.
+- Chat checkpoints and agent memory are persisted in PostgreSQL. Deleting a thread removes its
+  checkpoints, but the user's long-term `/memories/picker_notes.md` memory is shared across that
+  user's threads and is not deleted with a single thread.
 - The price estimator always returns `0.0` with zero confidence until real seed data exists.
 - The anomaly tier checks are neutral placeholders, so every valid report is accepted.
 - Reports are stored in PostgreSQL, but price estimation does not use them until market

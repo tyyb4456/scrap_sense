@@ -209,6 +209,17 @@ def llm_check_node(state: PipelineState) -> dict[str, Any]:
     return {"verdict": verdict}
 
 
+def _picker_id_from_config(config: RunnableConfig) -> str:
+    """Prefer the authenticated picker id over the conversation thread id."""
+    configurable = config.get("configurable") or {}
+    picker_id = configurable.get("picker_id")
+    if isinstance(picker_id, str) and picker_id:
+        return picker_id
+
+    thread_id = configurable.get("thread_id")
+    return thread_id if isinstance(thread_id, str) and thread_id else "unknown"
+
+
 def _resolve_verdict(state: PipelineState) -> AnomalyVerdict:
     verdict = state.get("verdict")
     if verdict is not None:
@@ -266,9 +277,7 @@ async def finalize_report_node(
         ),
         "",
     )
-    configurable = config.get("configurable") or {}
-    thread_id = configurable.get("thread_id")
-    picker_id = thread_id if isinstance(thread_id, str) and thread_id else "unknown"
+    picker_id = _picker_id_from_config(config)
 
     try:
         final_report = await save_report(
