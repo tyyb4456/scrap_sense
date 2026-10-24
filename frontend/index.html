@@ -4,7 +4,32 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>ScrapSense</title>
+    <meta name="theme-color" content="#f4f3f1" />
+    <script>
+      (function () {
+        try {
+          var stored = localStorage.getItem('scrapsense-theme')
+          var dark =
+            stored === 'dark' ||
+            (stored !== 'light' && window.matchMedia('(prefers-color-scheme: dark)').matches)
+          document.documentElement.dataset.theme = dark ? 'dark' : 'light'
+          document.documentElement.style.colorScheme = dark ? 'dark' : 'light'
+          var meta = document.querySelector('meta[name="theme-color"]')
+          if (meta) meta.setAttribute('content', dark ? '#131312' : '#f4f3f1')
+        } catch (error) {}
+      })()
+    </script>
+    <meta
+      name="description"
+      content="ScrapSense: report a scrap sale in plain language and check a fair price before you negotiate."
+    />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+    <title>ScrapSense · picker price ledger</title>
   </head>
   <body>
     <div id="root"></div>

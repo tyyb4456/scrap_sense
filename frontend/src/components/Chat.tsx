@@ -1,6 +1,5 @@
-import { useEffect, useRef, useState, type ChangeEvent, type FormEvent } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import {
-  createThread,
   deleteThread,
   errorMessage,
   getThreadMessages,
@@ -9,39 +8,174 @@ import {
   type ChatThread,
 } from '../lib/api'
 import { useAccessToken } from '../lib/useAccessToken'
+import { ChatView } from './chat/ChatView'
+import type { ChatMessage } from './chat/types'
 
-interface ChatMessage {
-  id: string
-  role: 'user' | 'assistant'
-  content: string
+interface ChatProps {
+  accountSlot?: ReactNode
+  demo?: boolean
 }
 
-const greeting: ChatMessage = {
-  id: 'greeting',
-  role: 'assistant',
-  content:
-    'Assalam-o-alaikum. Tell me about a scrap sale or ask what a material is worth.',
+function minutesAgo(minutes: number): string {
+  return new Date(Date.now() - minutes * 60_000).toISOString()
 }
 
-export function Chat() {
+const demoThreads: ChatThread[] = [
+  {
+    id: 'demo-plastic',
+    title: '2 kilo plastic · Rs 300',
+    created_at: minutesAgo(52),
+    updated_at: minutesAgo(12),
+  },
+  {
+    id: 'demo-iron',
+    title: 'Iron rate before selling',
+    created_at: minutesAgo(190),
+    updated_at: minutesAgo(96),
+  },
+  {
+    id: 'demo-paper',
+    title: 'Kaghaz sale · 5 kilo',
+    created_at: minutesAgo(1_520),
+    updated_at: minutesAgo(1_470),
+  },
+  {
+    id: 'demo-copper',
+    title: 'Copper wire weight check',
+    created_at: minutesAgo(4_380),
+    updated_at: minutesAgo(4_320),
+  },
+]
+
+const demoHistory: Record<string, ChatMessage[]> = {
+  'demo-plastic': [
+    {
+      id: 'demo-plastic-1',
+      role: 'user',
+      content: 'Aaj maine 2 kilo plastic becha, 300 rupay milay.',
+    },
+    {
+      id: 'demo-plastic-2',
+      role: 'assistant',
+      content:
+        'Noted: 2 kilo plastic for Rs 300. That works out to Rs 150 per kilo. I’ve sent it for checking. There isn’t enough verified data yet for a Multan plastic range, so I won’t invent one.',
+    },
+    {
+      id: 'demo-plastic-3',
+      role: 'user',
+      content: 'Thekedar ne wazan 1.8 kilo bataya.',
+    },
+    {
+      id: 'demo-plastic-4',
+      role: 'assistant',
+      content:
+        'That is a 200 gram gap from the weight you reported. I’ve flagged the report for review instead of counting it. If you can, keep your own weight and the dealer’s weight separate next time.',
+    },
+  ],
+  'demo-iron': [
+    {
+      id: 'demo-iron-1',
+      role: 'user',
+      content: 'What is iron worth this week in Multan?',
+    },
+    {
+      id: 'demo-iron-2',
+      role: 'assistant',
+      content:
+        'I don’t have a verified iron price for this week yet. No checked picker reports have come in, so I’d rather say that than guess. I can keep your question on file and show a range once the reports are validated.',
+    },
+    {
+      id: 'demo-iron-3',
+      role: 'user',
+      content: 'The dealer said Rs 95 per kilo.',
+    },
+    {
+      id: 'demo-iron-4',
+      role: 'assistant',
+      content:
+        'That is a dealer quote, not a checked picker report. I’ve noted it separately. It won’t be used as a price reference on its own.',
+    },
+  ],
+  'demo-paper': [
+    {
+      id: 'demo-paper-1',
+      role: 'user',
+      content: 'Kal 5 kilo kaghaz becha, 250 rupay milay.',
+    },
+    {
+      id: 'demo-paper-2',
+      role: 'assistant',
+      content:
+        'Recorded as a paper report: 5 kilo for Rs 250. I’ll check the weight and payment before it counts toward the reference. There is no verified paper range for Multan yet, so I can’t quote a price.',
+    },
+  ],
+  'demo-copper': [
+    {
+      id: 'demo-copper-1',
+      role: 'user',
+      content: 'Copper wire ka wazan kaise check karun?',
+    },
+    {
+      id: 'demo-copper-2',
+      role: 'assistant',
+      content:
+        'Weigh it on a kitchen scale if you can, and note the dealer’s weight too. Send both numbers here. I won’t quote a copper price until there are checked reports to support it.',
+    },
+  ],
+}
+
+function titleFromText(text: string): string {
+  const clean = text.replace(/\s+/g, ' ').trim()
+  if (clean.length <= 46) {
+    return clean
+  }
+  return `${clean.slice(0, 46).trimEnd()}…`
+}
+
+function demoReply(text: string): string {
+  const value = text.toLowerCase()
+
+  if (/(plastic|bottle|pet|polythene)/.test(value)) {
+    return 'Noted. I’ll check the weight and the amount before this counts toward the plastic reference. There is not enough verified data for a Multan plastic range yet, so I won’t guess one.'
+  }
+  if (/(iron|loha|sariya|steel)/.test(value)) {
+    return 'I don’t have a verified iron price for this week yet. No checked reports have come in for Multan, so I’d rather say that than invent a number. I can keep your question on file.'
+  }
+  if (/(paper|kaghaz|kagaz|carton|cardboard)/.test(value)) {
+    return 'Recorded as a paper report. I’ll verify the weight and payment first. Right now there is no checked paper reference for Multan, so I can’t quote a price.'
+  }
+  if (/(copper|tamba|tambe|wire)/.test(value)) {
+    return 'Noted as copper wire. I’ll check the report before it affects any reference. I don’t have a verified copper range yet, so no number from me until the data is there.'
+  }
+
+  return 'Samajh gaya. I’ve noted the report. I’ll check the material, the weight, and what you were paid before it affects any price. Is there a weight or amount you want to add?'
+}
+
+function LiveChat({ accountSlot }: { accountSlot?: ReactNode }) {
   const getToken = useAccessToken()
   const [threads, setThreads] = useState<ChatThread[]>([])
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null)
   const [messages, setMessages] = useState<ChatMessage[]>([])
-  const [draft, setDraft] = useState('')
+  const [loadingThreads, setLoadingThreads] = useState(true)
+  const [loadingMessages, setLoadingMessages] = useState(true)
   const [sending, setSending] = useState(false)
-  const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const endRef = useRef<HTMLDivElement>(null)
+  const [reloadKey, setReloadKey] = useState(0)
+
+  const pendingRef = useRef<{ text: string; threadId: string | null } | null>(null)
+  const suppressHistoryRef = useRef<string | null>(null)
+  const sendingRef = useRef(false)
+  const activeThreadRef = useRef<string | null>(null)
 
   useEffect(() => {
-    endRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages, sending])
+    activeThreadRef.current = activeThreadId
+  }, [activeThreadId])
 
   useEffect(() => {
     let cancelled = false
+    setLoadingThreads(true)
 
-    async function loadThreadList() {
+    void (async () => {
       try {
         const threadList = await listThreads(await getToken())
         if (cancelled) {
@@ -55,12 +189,10 @@ export function Chat() {
         }
       } finally {
         if (!cancelled) {
-          setLoading(false)
+          setLoadingThreads(false)
         }
       }
-    }
-
-    void loadThreadList()
+    })()
 
     return () => {
       cancelled = true
@@ -70,21 +202,29 @@ export function Chat() {
   useEffect(() => {
     const threadId = activeThreadId
     if (!threadId) {
+      setMessages([])
+      setLoadingMessages(false)
+      return
+    }
+
+    if (suppressHistoryRef.current === threadId) {
+      suppressHistoryRef.current = null
+      setLoadingMessages(false)
       return
     }
 
     let cancelled = false
+    setLoadingMessages(true)
 
-    async function loadHistory(id: string) {
-      setLoading(true)
+    void (async () => {
       try {
-        const history = await getThreadMessages(await getToken(), id)
+        const history = await getThreadMessages(await getToken(), threadId)
         if (cancelled) {
           return
         }
         setMessages(
           history.messages.map((message, index) => ({
-            id: `${id}:${index}`,
+            id: `${threadId}:${index}`,
             role: message.role,
             content: message.content,
           })),
@@ -95,29 +235,214 @@ export function Chat() {
         }
       } finally {
         if (!cancelled) {
-          setLoading(false)
+          setLoadingMessages(false)
         }
       }
-    }
-
-    void loadHistory(threadId)
+    })()
 
     return () => {
       cancelled = true
     }
-  }, [activeThreadId, getToken])
+  }, [activeThreadId, getToken, reloadKey])
 
   async function refreshThreads(token: string) {
-    const threadList = await listThreads(token)
-    setThreads(threadList)
+    try {
+      const threadList = await listThreads(token)
+      setThreads(threadList)
+    } catch {
+      // The reply already succeeded; keep the current thread list.
+    }
   }
 
-  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    const text = draft.trim()
-    if (!text || sending) {
+  async function deliver(text: string, threadId: string | null, appendUser: boolean) {
+    if (sendingRef.current) {
       return
     }
+
+    sendingRef.current = true
+    setSending(true)
+    setError(null)
+
+    if (appendUser) {
+      setMessages((current) => [
+        ...current,
+        { id: crypto.randomUUID(), role: 'user', content: text },
+      ])
+    }
+
+    const startedThreadId = threadId
+    let target = threadId
+
+    try {
+      const token = await getToken()
+      const response = await sendMessage(token, text, target ?? undefined)
+      const stillHere = activeThreadRef.current === startedThreadId
+
+      if (!target) {
+        target = response.thread_id
+        const now = new Date().toISOString()
+        const placeholder: ChatThread = {
+          id: target,
+          title: titleFromText(text),
+          created_at: now,
+          updated_at: now,
+        }
+        setThreads((current) => [
+          placeholder,
+          ...current.filter((thread) => thread.id !== target),
+        ])
+        if (stillHere) {
+          suppressHistoryRef.current = target
+          setActiveThreadId(target)
+        }
+      }
+
+      if (stillHere) {
+        setMessages((current) => [
+          ...current,
+          { id: crypto.randomUUID(), role: 'assistant', content: response.reply },
+        ])
+      }
+      pendingRef.current = null
+      await refreshThreads(token)
+    } catch (sendError) {
+      pendingRef.current = { text, threadId: target }
+      setError(errorMessage(sendError))
+    } finally {
+      sendingRef.current = false
+      setSending(false)
+    }
+  }
+
+  function handleSend(text: string) {
+    if (sendingRef.current) {
+      return
+    }
+    void deliver(text, activeThreadId, true)
+  }
+
+  function handleNewChat() {
+    if (sendingRef.current) {
+      return
+    }
+    setError(null)
+    pendingRef.current = null
+    setActiveThreadId(null)
+    setMessages([])
+    setLoadingMessages(false)
+  }
+
+  function handleSelectThread(threadId: string) {
+    setError(null)
+    pendingRef.current = null
+    setActiveThreadId(threadId)
+  }
+
+  async function handleDeleteThread(): Promise<boolean> {
+    const threadId = activeThreadId
+    if (!threadId || sendingRef.current) {
+      return false
+    }
+
+    setError(null)
+    pendingRef.current = null
+
+    try {
+      const token = await getToken()
+      await deleteThread(token, threadId)
+      const remaining = threads.filter((thread) => thread.id !== threadId)
+      setThreads(remaining)
+      setMessages([])
+      setActiveThreadId(remaining[0]?.id ?? null)
+      return true
+    } catch (deleteError) {
+      setError(errorMessage(deleteError))
+      return false
+    }
+  }
+
+  function handleRetry() {
+    if (sendingRef.current) {
+      return
+    }
+
+    const pending = pendingRef.current
+    if (pending) {
+      void deliver(pending.text, pending.threadId, false)
+      return
+    }
+
+    setError(null)
+    setReloadKey((current) => current + 1)
+  }
+
+  function handleDismissError() {
+    setError(null)
+    pendingRef.current = null
+  }
+
+  function handleRefreshThreads() {
+    void (async () => {
+      try {
+        const token = await getToken()
+        setThreads(await listThreads(token))
+        setReloadKey((current) => current + 1)
+      } catch (refreshError) {
+        setError(errorMessage(refreshError))
+      }
+    })()
+  }
+
+  return (
+    <ChatView
+      threads={threads}
+      activeThreadId={activeThreadId}
+      messages={messages}
+      loadingThreads={loadingThreads}
+      loadingMessages={loadingMessages}
+      sending={sending}
+      error={error}
+      accountSlot={accountSlot}
+      onSend={handleSend}
+      onRetry={handleRetry}
+      onDismissError={handleDismissError}
+      onNewChat={handleNewChat}
+      onSelectThread={handleSelectThread}
+      onDeleteThread={handleDeleteThread}
+      onRefreshThreads={handleRefreshThreads}
+    />
+  )
+}
+
+function DemoChat({ accountSlot }: { accountSlot?: ReactNode }) {
+  const [threads, setThreads] = useState<ChatThread[]>(demoThreads)
+  const [activeThreadId, setActiveThreadId] = useState<string | null>(
+    demoThreads[0]?.id ?? null,
+  )
+  const [messagesByThread, setMessagesByThread] =
+    useState<Record<string, ChatMessage[]>>(demoHistory)
+  const [sending, setSending] = useState(false)
+
+  const sendingRef = useRef(false)
+  const timerRef = useRef<number | null>(null)
+
+  const messages = activeThreadId ? (messagesByThread[activeThreadId] ?? []) : []
+
+  useEffect(() => {
+    return () => {
+      if (timerRef.current) {
+        window.clearTimeout(timerRef.current)
+      }
+    }
+  }, [])
+
+  function handleSend(text: string) {
+    if (sendingRef.current) {
+      return
+    }
+
+    sendingRef.current = true
+    setSending(true)
 
     const userMessage: ChatMessage = {
       id: crypto.randomUUID(),
@@ -125,190 +450,111 @@ export function Chat() {
       content: text,
     }
 
-    setError(null)
-    setSending(true)
+    let target = activeThreadId
 
-    try {
-      const token = await getToken()
-      let threadId = activeThreadId
-
-      if (!threadId) {
-        const thread = await createThread(token)
-        threadId = thread.id
-        setThreads((current) => [
-          thread,
-          ...current.filter((item) => item.id !== thread.id),
-        ])
-        setMessages([userMessage])
-      } else {
-        setMessages((current) => [...current, userMessage])
-      }
-
-      setDraft('')
-      const response = await sendMessage(token, text, threadId)
-      setActiveThreadId(threadId)
-      setMessages((current) => [
-        ...current,
-        { id: crypto.randomUUID(), role: 'assistant', content: response.reply },
-      ])
-      await refreshThreads(token)
-    } catch (sendError) {
-      setError(errorMessage(sendError))
-    } finally {
-      setSending(false)
-    }
-  }
-
-  async function handleNewChat() {
-    if (sending || loading) {
-      return
-    }
-
-    setError(null)
-    try {
-      const token = await getToken()
-      const thread = await createThread(token)
+    if (!target) {
+      const newId = `demo-${Date.now()}`
+      const now = new Date().toISOString()
+      target = newId
       setThreads((current) => [
-        thread,
-        ...current.filter((item) => item.id !== thread.id),
+        {
+          id: newId,
+          title: titleFromText(text),
+          created_at: now,
+          updated_at: now,
+        },
+        ...current,
       ])
-      setMessages([])
-      setActiveThreadId(thread.id)
-    } catch (createError) {
-      setError(errorMessage(createError))
+      setActiveThreadId(newId)
+      setMessagesByThread((current) => ({ ...current, [newId]: [userMessage] }))
+    } else {
+      const id = target
+      setMessagesByThread((current) => ({
+        ...current,
+        [id]: [...(current[id] ?? []), userMessage],
+      }))
     }
+
+    const threadId = target
+    setThreads((current) =>
+      current.map((thread) =>
+        thread.id === threadId ? { ...thread, updated_at: new Date().toISOString() } : thread,
+      ),
+    )
+
+    timerRef.current = window.setTimeout(() => {
+      const reply: ChatMessage = {
+        id: crypto.randomUUID(),
+        role: 'assistant',
+        content: demoReply(text),
+      }
+      setMessagesByThread((current) => ({
+        ...current,
+        [threadId]: [...(current[threadId] ?? []), reply],
+      }))
+      setThreads((current) =>
+        current.map((thread) =>
+          thread.id === threadId ? { ...thread, updated_at: new Date().toISOString() } : thread,
+        ),
+      )
+      sendingRef.current = false
+      setSending(false)
+    }, 950)
   }
 
-  async function handleDeleteThread() {
-    if (!activeThreadId || sending || loading) {
+  function handleNewChat() {
+    if (sendingRef.current) {
       return
     }
+    setActiveThreadId(null)
+  }
 
-    setError(null)
-    try {
-      const token = await getToken()
-      await deleteThread(token, activeThreadId)
-      const remaining = threads.filter((thread) => thread.id !== activeThreadId)
-      setThreads(remaining)
-      setMessages([])
-      setActiveThreadId(remaining[0]?.id ?? null)
-    } catch (deleteError) {
-      setError(errorMessage(deleteError))
+  function handleSelectThread(threadId: string) {
+    setActiveThreadId(threadId)
+  }
+
+  async function handleDeleteThread(): Promise<boolean> {
+    const threadId = activeThreadId
+    if (!threadId || sendingRef.current) {
+      return false
     }
-  }
 
-  function handleSelectThread(event: ChangeEvent<HTMLSelectElement>) {
-    setActiveThreadId(event.target.value || null)
+    const remaining = threads.filter((thread) => thread.id !== threadId)
+    setThreads(remaining)
+    setMessagesByThread((current) => {
+      const next = { ...current }
+      delete next[threadId]
+      return next
+    })
+    setActiveThreadId(remaining[0]?.id ?? null)
+    return true
   }
-
-  const visibleMessages = messages.length === 0 && !loading ? [greeting] : messages
 
   return (
-    <section className="flex h-[calc(100svh-8.5rem)] min-h-[28rem] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-      <div className="flex flex-wrap items-center gap-2 border-b border-slate-200 bg-slate-50 px-3 py-2 sm:px-4">
-        <label htmlFor="chat-thread" className="sr-only">
-          Conversation
-        </label>
-        <select
-          id="chat-thread"
-          value={activeThreadId ?? ''}
-          onChange={handleSelectThread}
-          disabled={loading || sending || threads.length === 0}
-          className="min-w-0 flex-1 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-200 disabled:opacity-60"
-        >
-          {threads.length === 0 ? <option value="">New chat</option> : null}
-          {threads.map((thread) => (
-            <option key={thread.id} value={thread.id}>
-              {thread.title}
-            </option>
-          ))}
-        </select>
-        <button
-          type="button"
-          onClick={handleNewChat}
-          disabled={sending || loading}
-          className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          New chat
-        </button>
-        <button
-          type="button"
-          onClick={handleDeleteThread}
-          disabled={!activeThreadId || sending || loading}
-          className="rounded-lg border border-rose-200 bg-white px-3 py-2 text-sm font-medium text-rose-700 transition hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          Delete
-        </button>
-      </div>
-
-      <div className="flex-1 space-y-4 overflow-y-auto p-4 sm:p-6" aria-live="polite">
-        {loading ? (
-          <p className="text-sm text-slate-500">Loading conversation…</p>
-        ) : null}
-
-        {visibleMessages.map((message) => (
-          <div
-            key={message.id}
-            className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
-          >
-            <p
-              className={`max-w-[85%] whitespace-pre-wrap rounded-2xl px-4 py-3 text-sm leading-relaxed ${
-                message.role === 'user'
-                  ? 'rounded-br-sm bg-emerald-600 text-white'
-                  : 'rounded-bl-sm bg-slate-100 text-slate-800'
-              }`}
-            >
-              {message.content}
-            </p>
-          </div>
-        ))}
-
-        {sending ? (
-          <div className="flex justify-start">
-            <p className="rounded-2xl rounded-bl-sm bg-slate-100 px-4 py-3 text-sm text-slate-500">
-              ScrapSense is thinking…
-            </p>
-          </div>
-        ) : null}
-        <div ref={endRef} />
-      </div>
-
-      {error ? (
-        <p className="border-t border-rose-100 bg-rose-50 px-4 py-3 text-sm text-rose-700">
-          {error}
-        </p>
-      ) : null}
-
-      <form
-        onSubmit={handleSubmit}
-        className="flex items-end gap-2 border-t border-slate-200 bg-white p-3 sm:p-4"
-      >
-        <label htmlFor="chat-message" className="sr-only">
-          Message
-        </label>
-        <textarea
-          id="chat-message"
-          value={draft}
-          onChange={(event) => setDraft(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === 'Enter' && !event.shiftKey) {
-              event.preventDefault()
-              event.currentTarget.form?.requestSubmit()
-            }
-          }}
-          rows={2}
-          maxLength={4000}
-          placeholder="Example: aaj maine 2 kilo plastic becha, 300 rupay mila"
-          className="max-h-40 min-h-12 flex-1 resize-none rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-200"
-        />
-        <button
-          type="submit"
-          disabled={sending || loading || draft.trim().length === 0}
-          className="rounded-xl bg-emerald-600 px-5 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          {sending ? 'Sending…' : 'Send'}
-        </button>
-      </form>
-    </section>
+    <ChatView
+      threads={threads}
+      activeThreadId={activeThreadId}
+      messages={messages}
+      loadingThreads={false}
+      loadingMessages={false}
+      sending={sending}
+      error={null}
+      accountSlot={accountSlot}
+      demo
+      onSend={handleSend}
+      onRetry={() => undefined}
+      onDismissError={() => undefined}
+      onNewChat={handleNewChat}
+      onSelectThread={handleSelectThread}
+      onDeleteThread={handleDeleteThread}
+      onRefreshThreads={() => undefined}
+    />
   )
+}
+
+export function Chat({ accountSlot, demo = false }: ChatProps) {
+  if (demo) {
+    return <DemoChat accountSlot={accountSlot} />
+  }
+  return <LiveChat accountSlot={accountSlot} />
 }
