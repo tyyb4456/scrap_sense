@@ -23,8 +23,13 @@ OTHER_USER = ClerkUser(user_id="user_other", session_id="sess_2", claims={})
 
 
 class FakeAgent:
-    def __init__(self, reply: str = "Try selling plastic in Multan.") -> None:
+    def __init__(
+        self,
+        reply: str = "Try selling plastic in Multan.",
+        checkpointer: FakeCheckpointer | None = None,
+    ) -> None:
         self.reply = reply
+        self.checkpointer = checkpointer
         self.calls: list[dict[str, Any]] = []
 
     async def ainvoke(
@@ -36,6 +41,11 @@ class FakeAgent:
     ) -> dict[str, Any]:
         self.calls.append({"payload": payload, "config": config, "context": context})
         return {"messages": [AIMessage(content=self.reply)]}
+
+    async def aget_state(self, config: dict[str, Any]) -> Any:
+        thread_id = config["configurable"]["thread_id"]
+        messages = self.checkpointer.history.get(thread_id) if self.checkpointer else None
+        return SimpleNamespace(values={"messages": messages or []})
 
 
 class ExplodingAgent:
@@ -144,8 +154,9 @@ def chat_client(
 ) -> Iterator[tuple[TestClient, FakeThreadStore, FakeCheckpointer]]:
     thread_store = store or FakeThreadStore()
     checkpoint_store = checkpointer or FakeCheckpointer()
+    chat_agent = agent or FakeAgent(checkpointer=checkpoint_store)
     app.dependency_overrides[require_auth] = lambda: user
-    app.dependency_overrides[get_chat_agent] = lambda: agent or FakeAgent()
+    app.dependency_overrides[get_chat_agent] = lambda: chat_agent
     app.dependency_overrides[get_chat_thread_store] = lambda: thread_store
     app.dependency_overrides[get_checkpointer] = lambda: checkpoint_store
     try:

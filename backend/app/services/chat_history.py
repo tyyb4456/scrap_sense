@@ -1,11 +1,10 @@
-"""Read user-facing messages back from LangGraph checkpoints."""
+"""Read user-facing messages back from the agent's graph state."""
 
 from __future__ import annotations
 
 from typing import Any
 
 from langchain_core.messages import AIMessage, HumanMessage
-from langgraph.checkpoint.base import BaseCheckpointSaver
 
 from app.schemas.chat import ThreadMessage
 
@@ -27,19 +26,19 @@ def _text_from_content(content: Any) -> str:
 
 
 async def load_thread_messages(
-    checkpointer: BaseCheckpointSaver,
+    graph: Any,
     *,
     thread_id: str,
 ) -> list[ThreadMessage]:
-    """Return only human/assistant turns for a single checkpoint thread."""
-    snapshot = await checkpointer.aget_tuple(
-        {"configurable": {"thread_id": thread_id}}
-    )
-    if snapshot is None:
-        return []
+    """Return only human/assistant turns for a single checkpoint thread.
 
-    channel_values = (snapshot.checkpoint or {}).get("channel_values") or {}
-    raw_messages = channel_values.get("messages") or []
+    The graph state is read through ``aget_state`` rather than the raw
+    checkpointer because message channels are stored as deltas and only the
+    graph can resolve them into the full message list.
+    """
+    state = await graph.aget_state({"configurable": {"thread_id": thread_id}})
+    values = getattr(state, "values", None) or {}
+    raw_messages = values.get("messages") or []
 
     messages: list[ThreadMessage] = []
     for message in raw_messages:

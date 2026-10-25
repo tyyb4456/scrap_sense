@@ -25,6 +25,7 @@ import {
   TagMark,
   TrashIcon,
 } from './icons'
+import { MarkdownMessage } from './MarkdownMessage'
 import { MessageText } from './MessageText'
 import type { ChatMessage, ChatViewProps } from './types'
 
@@ -370,7 +371,7 @@ function AssistantMessage({
       <div className="min-w-0 flex-1">
         <p className="text-[11px] font-medium leading-4 text-muted">ScrapSense</p>
         <div className="clay-bubble-assistant mt-1.5 max-w-[62ch] px-4 py-3 text-[14px] leading-6 text-ink sm:text-[15px] sm:leading-7">
-          <MessageText text={message.content} tone="assistant" />
+          <MarkdownMessage text={message.content} tone="assistant" />
         </div>
         <div className="mt-1.5 flex items-center gap-1 opacity-100 transition-opacity sm:opacity-0 sm:group-focus-within:opacity-100 sm:group-hover:opacity-100">
           <button
@@ -393,7 +394,7 @@ function UserMessage({ message }: { message: ChatMessage }) {
     <div className="flex justify-end py-2">
       <div className="max-w-[86%] sm:max-w-[78%]">
         <div className="clay-bubble-user px-3.5 py-2.5 text-[14px] leading-6 text-ink sm:px-4 sm:py-3">
-          <MessageText text={message.content} tone="user" />
+          <MarkdownMessage text={message.content} tone="user" />
         </div>
       </div>
     </div>

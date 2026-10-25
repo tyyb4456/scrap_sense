@@ -176,15 +176,15 @@ async def create_thread(
 async def get_thread_messages(
     thread_id: uuid.UUID,
     user: Annotated[ClerkUser, Depends(require_auth)],
+    agent: Annotated[Any, Depends(get_chat_agent)],
     store: Annotated[ChatThreadStore, Depends(get_chat_thread_store)],
-    checkpointer: Annotated[Any, Depends(get_checkpointer)],
 ) -> ChatThreadHistory:
     thread = await _owned_thread(
         store=store,
         user_id=user.user_id,
         thread_id=thread_id,
     )
-    messages = await load_thread_messages(checkpointer, thread_id=str(thread.id))
+    messages = await load_thread_messages(agent, thread_id=str(thread.id))
     return ChatThreadHistory(thread_id=thread.id, messages=messages)
 
 
