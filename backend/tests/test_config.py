@@ -8,6 +8,17 @@ def test_xkiro_defaults_are_configured() -> None:
     assert settings.xkiro_model
 
 
+def test_price_defaults_are_conservative() -> None:
+    settings = Settings()
+
+    assert settings.price_min_observations == 3
+    assert settings.price_max_observation_age_days == 90
+    assert settings.price_max_observations == 2000
+    assert settings.price_duplicate_window_minutes == 15
+    assert settings.price_seed_prices_path.name == "seed_prices.json"
+    assert settings.price_seed_prices_path.parent.name == "data"
+
+
 def test_postgres_uri_strips_asyncpg_driver() -> None:
     settings = Settings(
         database_url="postgresql+asyncpg://user:pass@localhost:5432/scrapsense"

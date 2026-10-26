@@ -80,7 +80,7 @@ Two request types, two paths, converging on a shared data store.
 | — Tier 1: Deterministic | Is the price wildly off the recent median? Free, instant. | No |
 | — Tier 2: ML | Does price + quantity *together* look weird, even if price alone seems fine? (Isolation Forest) Free once trained. | No |
 | — Tier 3: LLM | Only for reports Tier 1 or 2 already flagged — legitimate outlier or bad data? | Yes |
-| **Price-estimator agent** | Fallback chain: local reports → city-wide reports → manually-collected seed price, blended by how much real data exists. Pure math. | No |
+| **Price-estimator agent** | Strict fallback chain: local reports → city-wide reports → manually-collected seed price → unavailable. The nearest level with enough evidence wins; levels are never blended. Pure math. | No |
 | **Classifier agent (secondary)** | Identifies material from a photo when a picker is unsure. Wraps a trained CNN. | No |
 
 §9 tracks which of these agents exist in code today versus which are still design targets.
@@ -112,12 +112,12 @@ There's no existing dataset for "fair scrap prices by material and region" — i
 - **Ongoing:** picker-submitted reports accumulate the real dataset the anomaly ML tier and eventual forecasting model depend on
 - **Cold-start problem to design around:** the app is only useful once enough pickers are reporting. Worth seeding the hackathon demo with a small set of realistic hardcoded reports rather than relying on live adoption during the build window
 
-> **TODO (week-1 field data):** there is no seed price file in the repository yet.
-> The price-estimator tool currently returns `0.0` with zero confidence. When real
-> week-1 data is collected, store it at `app/data/seed_prices.json` and give every
-> entry an explicit **source**, **collection date**, and **collector** alongside
-> `range`/`price_per_kg`, so freshness and provenance can be audited. Do not invent
-> placeholder prices in the meantime.
+> **TODO (week-1 field data):** the seed-price loader and file schema now exist at
+> `backend/app/data/seed_prices.json`, but the shipped file is intentionally empty.
+> Add audited week-1 entries only, each with an explicit **source** and **collection
+> date** (plus **collector** where attribution is available) alongside `price_per_kg`,
+> so freshness and provenance can be audited. Do not invent placeholder prices in the
+> meantime.
 
 ### Privacy notes
 - Location stored at neighborhood/city level only — never precise GPS
@@ -133,8 +133,9 @@ There's no existing dataset for "fair scrap prices by material and region" — i
 - **ML:** PyTorch (CNN), scikit-learn (Isolation Forest)
 - **Frontend:** React + TypeScript + Vite, Clerk-authenticated chat UI; voice-first remains
   the target given the literacy/connectivity constraints
-- **Data:** PostgreSQL-backed LangGraph checkpoints, long-term store, and finalized report
-  rows today; structured seed prices and market aggregation are still to be wired in
+- **Data:** PostgreSQL-backed LangGraph checkpoints, long-term store, finalized report rows, and
+  deterministic price aggregation today; the seed-price loader/config exists, but no verified
+  seed entries have been collected yet
 
 ---
 
@@ -159,7 +160,9 @@ There's no existing dataset for "fair scrap prices by material and region" — i
   graph wiring for the anomaly stages, and final-report persistence
 - ✅ `backend/app/services/reports.py` — finalized reports stored in the PostgreSQL
   `reports` table, attributed to the authenticated picker id rather than the thread id
-- ✅ `backend/app/tools/price_estimator.py` — typed placeholder, tested
+- ✅ `backend/app/services/prices.py` — deterministic local -> city -> seed price
+  aggregation over eligible reports, exposed by `GET /api/v1/prices/estimate`
+- ✅ `backend/app/tools/price_estimator.py` — chat tool backed by the same service
 - ✅ `backend/app/api/routes/health.py` — liveness and database readiness
 - ✅ PostgreSQL persistence — `AsyncPostgresSaver` checkpoints and `AsyncPostgresStore`
   memory, initialized on first chat request
@@ -167,9 +170,10 @@ There's no existing dataset for "fair scrap prices by material and region" — i
   history restoration, and thread deletion
 - ⬜ Anomaly agent — the deterministic and ML nodes return neutral verdicts; no
   `anomaly_agent.py`, Isolation Forest, or trained model exists
-- ⬜ Price estimator — returns `0.0`/zero confidence; no seed data or fallback chain yet
+- ✅ Price estimator — median of eligible local/city reports, explicit seed fallback,
+  and `unavailable` when evidence is insufficient
+- ⬜ Seed data — loader and empty file exist; no verified week-1 entries collected yet
 - ⬜ Classifier agent — not present, not even a stub module
-- ⬜ Market data aggregation — stored reports are not yet aggregated into price references
 
 ---
 
@@ -203,6 +207,7 @@ rather than hidden:
 - **Thread deletion, but no memory deletion.** Deleting a thread removes its checkpoints, but the
   per-user `/memories/picker_notes.md` is intentionally shared across that user's threads and
   cannot be erased yet.
-- **No market data aggregation.** Finalized reports are stored, but nothing yet aggregates
-  them into price references; the estimator returns a placeholder `0.0`.
+- **Thin market evidence and no verified seed entries.** Reports are now aggregated into
+  price references, but low report volume and the empty seed file mean many requests
+  correctly return `unavailable`. The schema stores PKR/kg only and no separate sale time.
 - **No retention policy.** Checkpoints and memories accumulate until someone removes them.

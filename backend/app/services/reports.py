@@ -1,6 +1,11 @@
-"""Persist finalized scrap reports produced by the intake pipeline."""
+"""Persist and read finalized scrap reports."""
 
 from __future__ import annotations
+
+from datetime import datetime
+
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import SessionLocal
 from app.models.report import Report
@@ -39,3 +44,39 @@ async def save_report(
         await session.commit()
         await session.refresh(report)
         return FinalReport.model_validate(report)
+
+
+async def fetch_reports_for_pricing(
+    session: AsyncSession,
+    *,
+    material_aliases: set[str],
+    city: str,
+    currency: str,
+    since: datetime,
+    limit: int,
+) -> list[Report]:
+    """Return a bounded, filtered set of candidate reports for aggregation.
+
+    Only accepted, non-anomalous reports in the requested city and currency are
+    read. The service re-validates every row, so this query is an efficiency
+    filter rather than the sole eligibility boundary.
+    """
+    if not material_aliases:
+        return []
+
+    statement = (
+        select(Report)
+        .where(
+            Report.status == "accepted",
+            Report.is_anomalous.is_(False),
+            Report.price_per_kg > 0,
+            Report.created_at >= since,
+            func.lower(func.trim(Report.currency)) == currency.lower(),
+            func.lower(func.trim(Report.city)) == city,
+            func.lower(func.trim(Report.material)).in_(sorted(material_aliases)),
+        )
+        .order_by(Report.created_at.desc())
+        .limit(limit)
+    )
+    result = await session.execute(statement)
+    return list(result.scalars())

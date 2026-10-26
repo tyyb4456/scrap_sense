@@ -31,6 +31,14 @@ class Settings(BaseSettings):
     
     use_llm_reasoning: bool = False
 
+    # Price intelligence. These are conservative defaults, not scientifically
+    # validated thresholds. Tune them once real field data volume is known.
+    price_min_observations: int = Field(default=3, ge=1)
+    price_max_observation_age_days: int = Field(default=90, ge=1)
+    price_max_observations: int = Field(default=2000, ge=1)
+    price_duplicate_window_minutes: int = Field(default=15, ge=0)
+    price_seed_prices_path: Path = BACKEND_DIR / "app" / "data" / "seed_prices.json"
+
     cors_origins: list[str] = Field(default_factory=lambda: ["http://localhost:5173"])
 
     clerk_secret_key: SecretStr | None = None

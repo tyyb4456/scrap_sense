@@ -21,3 +21,8 @@ pytest-asyncio
 httpx
 ruff
 mypy
+
+numpy
+pandas
+sciket-learn
+plotly

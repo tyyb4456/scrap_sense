@@ -57,10 +57,11 @@ Built today:
 - LLM structured extraction plus deterministic validation of intake reports, with uncertain fields
   flagged rather than guessed.
 - Final reports persisted to PostgreSQL, attributed to the picker id (never the thread id).
-- Placeholder price estimator returning `0.0` at zero confidence, and placeholder deterministic /
-  ML anomaly tiers returning neutral verdicts.
+- Deterministic price estimates from eligible reports with local -> city -> seed fallback, an
+  authenticated `GET /api/v1/prices/estimate` endpoint, and a frontend price-check dialog.
+- Placeholder deterministic / ML anomaly tiers returning neutral verdicts.
 
-Explicitly not built yet: market-price aggregation from stored reports, seeded field prices,
+Explicitly not built yet: verified seeded field prices (the loader and empty file exist),
 trained anomaly models, the material classifier CNN, forecasting, reporter reputation, and the
 coordinator's offline gap-analysis loop.
 
@@ -87,8 +88,8 @@ respectful, locally grounded voice rather than a neutral assistant tone.
 - `ScrapSense_Project_Overview.md` records the problem framing and informal-recycling-market
   research figures (picker vs. dealer earnings, sub-value payouts, rigged weighing). Those figures
   are cited in prose without source links; treat them as project context, not audited data.
-- No seed price file exists. The price estimator must keep returning zero confidence rather than
-  inventing prices.
+- The seed price file exists but is intentionally empty. The estimator returns `unavailable`
+  rather than inventing prices until audited entries are added.
 - No testimonials, customers, benchmark results, demo dataset, or field data exist. None may be
   fabricated.
 - Material classifier training data is planned from a public dataset; nothing is collected yet.

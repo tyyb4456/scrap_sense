@@ -1,0 +1,5 @@
+{
+  "schema_version": 1,
+  "notes": "No verified seed prices have been collected. Add entries only from audited field collection, with source, collector (optional) and collected_at. Do not use illustrative values as live market data.",
+  "entries": []
+}

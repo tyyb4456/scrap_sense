@@ -21,8 +21,8 @@ from psycopg_pool import AsyncConnectionPool
 
 from app.agents.report_intaker import scrap_pipeline_agent
 from app.core.config import Settings, get_settings
-from app.tools.price_estimator import estimate_price
 from app.llm import build_xkiro_llm
+from app.tools.price_estimator import estimate_price
 
 logger = logging.getLogger(__name__)
 

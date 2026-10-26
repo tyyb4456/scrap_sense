@@ -27,6 +27,7 @@ import {
 } from './icons'
 import { MarkdownMessage } from './MarkdownMessage'
 import { MessageText } from './MessageText'
+import { PriceCheck } from './PriceCheck'
 import type { ChatMessage, ChatViewProps } from './types'
 
 const prompts = [
@@ -278,9 +279,11 @@ function ThreadEmpty({
 function EmptyState({
   disabled,
   onPrompt,
+  onOpenPriceCheck,
 }: {
   disabled: boolean
   onPrompt: (text: string) => void
+  onOpenPriceCheck?: () => void
 }) {
   return (
     <div className="pt-6 sm:pt-10 lg:pt-[7vh]">
@@ -315,6 +318,27 @@ function EmptyState({
             </button>
           ))}
         </div>
+
+        {onOpenPriceCheck ? (
+          <button
+            type="button"
+            onClick={onOpenPriceCheck}
+            className="clay-row group mt-2 flex w-full items-center gap-3 px-3 py-3 text-left"
+          >
+            <span className="clay-icon-chip flex h-8 w-8 shrink-0 items-center justify-center text-accent-text">
+              <TagMark className="h-4 w-4" />
+            </span>
+            <span className="min-w-0 flex-1">
+              <span className="block text-[13px] font-medium leading-5 text-ink">
+                Check a price before you sell
+              </span>
+              <span className="mt-0.5 block text-[11px] leading-4 text-muted">
+                See the evidence, scope, and freshness behind the number.
+              </span>
+            </span>
+            <ArrowRightIcon className="cta-arrow h-4 w-4 shrink-0 text-muted" />
+          </button>
+        ) : null}
       </div>
 
       <p className="mt-6 flex max-w-[48ch] items-start gap-2 text-[11px] leading-5 text-muted">
@@ -480,6 +504,7 @@ export function ChatView({
   const [deleting, setDeleting] = useState(false)
   const [copiedId, setCopiedId] = useState<string | null>(null)
   const [showJump, setShowJump] = useState(false)
+  const [priceOpen, setPriceOpen] = useState(false)
 
   const scrollRef = useRef<HTMLDivElement>(null)
   const endRef = useRef<HTMLDivElement>(null)
@@ -710,6 +735,18 @@ export function ChatView({
               </h1>
               <p className="mt-1 truncate text-[12px] leading-4 text-muted">{subline}</p>
             </div>
+            {!demo ? (
+              <button
+                type="button"
+                onClick={() => setPriceOpen(true)}
+                disabled={sending}
+                aria-label="Check a scrap price"
+                className="clay-button clay-button-secondary flex h-11 shrink-0 items-center gap-1.5 px-3 text-[12px] font-medium text-ink lg:h-9"
+              >
+                <TagMark className="h-3.5 w-3.5" />
+                <span className="hidden sm:inline">Check price</span>
+              </button>
+            ) : null}
             <button
               type="button"
               onClick={() => setConfirmOpen(true)}
@@ -751,7 +788,11 @@ export function ChatView({
                   {sending ? <Thinking /> : null}
                 </div>
               ) : (
-                <EmptyState disabled={sending} onPrompt={handlePrompt} />
+                <EmptyState
+                  disabled={sending}
+                  onPrompt={handlePrompt}
+                  onOpenPriceCheck={demo ? undefined : () => setPriceOpen(true)}
+                />
               )}
               <div ref={endRef} className="h-1" />
             </div>
@@ -846,6 +887,10 @@ export function ChatView({
           </div>
         </div>
       </main>
+
+      {!demo ? (
+        <PriceCheck open={priceOpen} onClose={() => setPriceOpen(false)} />
+      ) : null}
 
       {drawerOpen ? (
         <div className="fixed inset-0 z-50 lg:hidden">

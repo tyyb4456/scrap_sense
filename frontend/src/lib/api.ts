@@ -25,6 +25,43 @@ export interface ThreadHistory {
   messages: ThreadMessage[]
 }
 
+export type PriceSource = 'local_reports' | 'city_reports' | 'seed_data' | 'unavailable'
+export type PriceScope = 'area' | 'city' | 'national' | 'none'
+export type PriceEvidenceQuality = 'high' | 'medium' | 'low' | 'none'
+
+export interface PriceEstimate {
+  material: string
+  material_label: string
+  location: string | null
+  area: string | null
+  currency: string
+  unit: 'kg'
+  estimated_price_per_kg: number | null
+  source: PriceSource
+  geographic_scope: PriceScope
+  observation_count: number
+  local_observation_count: number
+  city_observation_count: number
+  observed_min_price_per_kg: number | null
+  observed_max_price_per_kg: number | null
+  oldest_observation_at: string | null
+  newest_observation_at: string | null
+  freshness_days: number | null
+  evidence_quality: PriceEvidenceQuality
+  confidence: number
+  seed_source: string | null
+  seed_collected_at: string | null
+  message: string
+  limitations: string[]
+  generated_at: string
+}
+
+export interface PriceEstimateQuery {
+  material: string
+  location?: string
+  area?: string
+}
+
 async function request<T>(path: string, token: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {
     ...init,
@@ -93,6 +130,21 @@ export function deleteThread(token: string, threadId: string): Promise<void> {
   return request<void>(`/chat/threads/${encodeURIComponent(threadId)}`, token, {
     method: 'DELETE',
   })
+}
+
+export function getPriceEstimate(
+  token: string,
+  query: PriceEstimateQuery,
+): Promise<PriceEstimate> {
+  const params = new URLSearchParams({ material: query.material })
+  if (query.location?.trim()) {
+    params.set('location', query.location.trim())
+  }
+  if (query.area?.trim()) {
+    params.set('area', query.area.trim())
+  }
+
+  return request<PriceEstimate>(`/prices/estimate?${params.toString()}`, token)
 }
 
 export function errorMessage(error: unknown): string {
