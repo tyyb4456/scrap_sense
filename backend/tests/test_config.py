@@ -8,6 +8,19 @@ def test_xkiro_defaults_are_configured() -> None:
     assert settings.xkiro_model
 
 
+def test_anomaly_defaults_are_conservative() -> None:
+    settings = Settings()
+
+    assert settings.use_llm_reasoning is False
+    assert settings.anomaly_min_sample_size == 5
+    assert settings.anomaly_max_observation_age_days == 90
+    assert settings.anomaly_mad_z_threshold == 3.5
+    assert settings.anomaly_min_relative_deviation == 0.5
+    assert settings.anomaly_zero_mad_min_relative_deviation == 1.0
+    assert settings.anomaly_ml_enabled is False
+    assert settings.anomaly_ml_min_reports == 200
+
+
 def test_price_defaults_are_conservative() -> None:
     settings = Settings()
 

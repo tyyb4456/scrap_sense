@@ -30,6 +30,22 @@ class Settings(BaseSettings):
     xkiro_model: str = "mistralai/mistral-large-2512"
     
     use_llm_reasoning: bool = False
+    anomaly_llm_timeout_seconds: float = Field(default=15.0, gt=0)
+
+    # Anomaly detection. Tier 1 is deterministic and enabled. Tier 2 (ML) stays
+    # disabled until there is a documented, sufficiently large real dataset and
+    # a trained artifact; see app/services/ml_anomaly.py.
+    anomaly_min_sample_size: int = Field(default=5, ge=2)
+    anomaly_max_observation_age_days: int = Field(default=90, ge=1)
+    anomaly_max_comparisons: int = Field(default=500, ge=1)
+    anomaly_mad_z_threshold: float = Field(default=3.5, gt=0)
+    anomaly_min_relative_deviation: float = Field(default=0.5, gt=0, lt=10)
+    anomaly_zero_mad_min_relative_deviation: float = Field(default=1.0, gt=0, lt=10)
+    anomaly_ml_enabled: bool = False
+    anomaly_ml_min_reports: int = Field(default=200, ge=1)
+    anomaly_ml_artifact_path: Path = (
+        BACKEND_DIR / "app" / "ml_artifacts" / "isolation_forest.joblib"
+    )
 
     # Price intelligence. These are conservative defaults, not scientifically
     # validated thresholds. Tune them once real field data volume is known.

@@ -72,7 +72,7 @@ def load_seed_prices(settings: Settings) -> list[SeedPrice]:
 
 
 def observation_from_report(report: Report) -> PriceObservation:
-    observed_at = report.created_at
+    observed_at = report.effective_observed_at
     return PriceObservation(
         report_id=report.id,
         picker_id=report.picker_id,

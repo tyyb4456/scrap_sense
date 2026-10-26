@@ -168,8 +168,14 @@ There's no existing dataset for "fair scrap prices by material and region" — i
   memory, initialized on first chat request
 - ✅ Frontend chat UI — Clerk sign-in, server-backed thread switching, new-chat creation,
   history restoration, and thread deletion
-- ⬜ Anomaly agent — the deterministic and ML nodes return neutral verdicts; no
-  `anomaly_agent.py`, Isolation Forest, or trained model exists
+- ✅ Anomaly Tier 1 — deterministic validation plus a conservative median/MAD comparison over
+  comparable accepted reports; suspicious reports are persisted as `flagged`, excluded from
+  estimates, and reviewable through `PATCH /api/v1/reports/{id}/review`
+- ⬜ Anomaly Tier 2 — interface and data-readiness gate exist in
+  `backend/app/services/ml_anomaly.py`; no model is trained or enabled because the repository does
+  not contain a defensible dataset yet
+- ✅ Anomaly Tier 3 — schema-validated LLM review of statistically suspicious reports, disabled by
+  default (`USE_LLM_REASONING=false`); failures retain the flag instead of clearing it
 - ✅ Price estimator — median of eligible local/city reports, explicit seed fallback,
   and `unavailable` when evidence is insufficient
 - ⬜ Seed data — loader and empty file exist; no verified week-1 entries collected yet

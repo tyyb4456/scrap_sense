@@ -3,8 +3,30 @@
 > **Post-audit update (2026-10-25):** This document is the read-only pre-implementation snapshot.
 > The price-intelligence gap described below has since been implemented: deterministic report
 > aggregation, seed fallback, the price API, the frontend price check, and real PostgreSQL
-> integration tests now exist. See `PRODUCT.md`, `README.md`, and
-> `ScrapSense_Project_Overview.md` for the current state.
+> integration tests now exist. The anomaly routing gap has also been fixed: deterministic
+> intake validation, a median/MAD Tier 1, a disabled-with-readiness-gate Tier 2, a reachable
+> LLM Tier 3 that cannot clear flags, persisted `flagged` reports, and a reviewer-only approval
+> endpoint now exist. See `PRODUCT.md`, `README.md`, and `ScrapSense_Project_Overview.md` for
+> the current state. The sections below remain the original audit snapshot.
+
+### Current anomaly status (2026-10-26)
+
+- Deterministic validation runs before every anomaly tier and blocks invalid input with a
+  clarification question instead of persisting it.
+- Anomaly Tier 1 is implemented as a conservative median/MAD comparison over accepted,
+  non-anomalous reports with matching material, currency, unit, and city. Area-level evidence is
+  preferred when available.
+- Suspicious reports are persisted as `flagged` and excluded from price aggregation. They are not
+  labelled fraud or automatically rejected.
+- Anomaly Tier 2 is deliberately disabled. The interface and readiness gate live in
+  `backend/app/services/ml_anomaly.py`; the current database is far below the documented threshold.
+- Anomaly Tier 3 is reachable only for suspicious reports when `USE_LLM_REASONING=true`. It can
+  annotate or strengthen a flag but cannot clear it; timeouts and provider failures retain the flag.
+- `PATCH /api/v1/reports/{report_id}/review` lets an `ADMIN_USER_IDS` reviewer approve or reject a
+  flagged report. Approval clears the active flag and restores price eligibility.
+- Migration `0003_add_anomaly_review_fields` adds `observed_at`, `reviewed_at`, and `reviewed_by`.
+- The backend suite covers graph routing, validation, MAD behavior, ML readiness, review actions,
+  and real PostgreSQL price-eligibility integration.
 
 - **Audit date:** 2026-10-25
 - **Spec source of truth:** `ScrapSense_Project_Overview.md` (supported by `README.md` and `PRODUCT.md`)

@@ -15,7 +15,9 @@ Included:
 - Chat thread creation, listing, history loading, and deletion scoped to the signed-in user
 - A coordinator agent that delegates sale reports to the report-intake subagent
 - An LLM extraction step plus deterministic validation in the intake pipeline
-- Placeholder anomaly checks (deterministic and ML tiers return neutral verdicts)
+- A conservative median/MAD anomaly check over comparable historical reports
+- Suspicious reports persisted as `flagged` and excluded from price aggregation pending review
+- A reviewer-only endpoint to approve or reject a flagged report
 - Final reports persisted to the PostgreSQL `reports` table
 - Deterministic price estimates from eligible reports, with local -> city -> seed fallback
 - A `GET /api/v1/prices/estimate` endpoint and a frontend price-check dialog
@@ -25,7 +27,8 @@ Included:
 Not included yet:
 
 - Verified seed-price entries (the loader and empty configuration file exist)
-- Trained anomaly models, the LLM anomaly tier being enabled by default, or forecasting
+- A trained anomaly model (Tier 2 is disabled until real data satisfies the documented readiness
+  threshold), the LLM anomaly tier being enabled by default, or forecasting
 - The material classifier CNN
 - Reporter reputation or contributor programs
 
@@ -90,7 +93,7 @@ selects a compatible loop for every platform.
 2. Put the publishable key in `frontend/.env` as `VITE_CLERK_PUBLISHABLE_KEY`.
 3. Put the secret key in `backend/.env` as `CLERK_SECRET_KEY`.
 4. Set `CLERK_AUTHORIZED_PARTIES` and `CORS_ORIGINS` to your frontend origins.
-5. Add reviewer Clerk user IDs to `ADMIN_USER_IDS` (JSON array) when reviewer features return.
+5. Add reviewer Clerk user IDs to `ADMIN_USER_IDS` (JSON array) to enable report review.
 
 `CLERK_JWT_KEY` is optional. Set it instead of relying on network calls for JWT verification; if
 either a secret key or JWT key is configured, Clerk verification is enabled. Chat returns `401`
@@ -104,6 +107,25 @@ xKiro, an OpenAI-compatible gateway. Configure it with:
 - `XKIRO_API_KEY` — your xKiro key (required; never commit it).
 - `XKIRO_BASE_URL` — defaults to `https://api.xkiro.com/v1`.
 - `XKIRO_MODEL` — the xKiro model id, for example `mistralai/mistral-large-2512`.
+- `USE_LLM_REASONING` (default `false`) — enables the Tier 3 LLM review of statistically
+  suspicious reports. It is never called for structurally invalid or ordinary reports.
+- `ANOMALY_LLM_TIMEOUT_SECONDS` (default `15`) — timeout for one LLM review.
+
+Anomaly detection is configured with conservative defaults:
+
+- `ANOMALY_MIN_SAMPLE_SIZE` (default `5`) — fewer comparable reports returns
+  `insufficient_evidence` and the report continues without a statistical conclusion.
+- `ANOMALY_MAX_OBSERVATION_AGE_DAYS` (default `90`) — only recent comparable reports are used.
+- `ANOMALY_MAX_COMPARISONS` (default `500`) — bound on rows read for one check.
+- `ANOMALY_MAD_Z_THRESHOLD` (default `3.5`) — modified z-score threshold.
+- `ANOMALY_MIN_RELATIVE_DEVIATION` (default `0.5`) — a value must differ from the median by at
+  least this fraction before it can be flagged.
+- `ANOMALY_ZERO_MAD_MIN_RELATIVE_DEVIATION` (default `1.0`) — when every comparable price is
+  identical (MAD is zero), only a very large relative deviation is marked suspicious; a small
+  deviation is explicitly treated as insufficient evidence.
+- `ANOMALY_ML_ENABLED` (default `false`) — Tier 2 stays disabled until the readiness gate is met.
+- `ANOMALY_ML_MIN_REPORTS` (default `200`) — documented data-readiness gate for a future model.
+- `ANOMALY_ML_ARTIFACT_PATH` — expected future artifact location. No artifact is shipped.
 
 Price estimation is configured with conservative, deliberately unvalidated defaults:
 
@@ -210,6 +232,47 @@ Example shape:
 }
 ```
 
+Report review (reviewer-only):
+
+- `PATCH /api/v1/reports/{report_id}/review` with `{"status": "accepted"}` or
+  `{"status": "rejected"}`. The Clerk user must be listed in `ADMIN_USER_IDS`. Approval clears the
+  active anomaly flag and makes the report eligible for price aggregation; rejection keeps the row
+  but excludes it by status. There is no public report-review UI yet.
+
+## Report trust and anomaly policy
+
+Statuses are the existing report lifecycle, not a second parallel state system:
+
+- `accepted` — passed deterministic validation and the available anomaly checks. It is eligible for
+  price aggregation. `reviewed_at` is null when the decision was automatic and set when a reviewer
+  approved it.
+- `flagged` — statistically suspicious or awaiting review. It is persisted, never deleted, and
+  excluded from price aggregation until a reviewer approves it.
+- `rejected` — a reviewer rejected it. It is retained for audit but never eligible.
+
+Deterministic validation runs before any anomaly tier and rejects missing fields, unsupported
+materials, non-finite or non-positive prices/quantities, unsupported currency/unit combinations,
+inconsistent location fields, and implausible future timestamps. Invalid input returns a
+clarification question and does not reach the anomaly or LLM tiers. It is not saved as market
+evidence.
+
+Tier 1 compares only accepted, non-anomalous historical reports with the same normalized material,
+currency, unit (`kg`), and city. When an area has enough evidence it is preferred, otherwise the
+city is used. The check uses the median and median absolute deviation; a statistical outlier is
+marked `suspicious` for review, never labelled fraud or automatically rejected. Insufficient
+history produces an explicit `insufficient_evidence` result rather than an invented anomaly.
+
+Tier 2 (ML) is disabled because the repository contains no defensible training set. The interface
+and readiness rule live in `backend/app/services/ml_anomaly.py`. The documented gate is 200 accepted
+comparable reports across at least three materials and two cities, with a time-based train/validation
+split and a saved artifact; until that exists, the tier returns `disabled`/`unavailable` and the
+workflow continues with deterministic evidence.
+
+Tier 3 (LLM) is reached only for a statistically suspicious report and only when
+`USE_LLM_REASONING=true`. Its structured output is schema-validated and cannot clear the flag or
+override validation. Timeouts and provider/malformed-output failures retain the statistical flag.
+If the LLM is unavailable, the report is still saved as `flagged`, never silently marked verified.
+
 Interactive docs are available at `http://127.0.0.1:8000/docs`.
 
 ## Checks
@@ -233,11 +296,15 @@ npm run build
   user's threads and is not deleted with a single thread.
 - Price evidence is thin until enough pickers report. The published seed file is empty, so with
   fewer than the configured minimum observations the API returns `unavailable`, not a guess.
-- The anomaly tier checks are neutral placeholders, so every valid report is accepted. Price
-  aggregation therefore excludes flagged reports but cannot detect new anomalies.
-- Report freshness uses the row's `created_at` (the save time), because the schema has no separate
-  market-observation timestamp. The report schema is PKR/kg only; other currencies are excluded
-  rather than converted.
+- Tier 1 is a statistical check, not a fraud detector. It can flag a legitimate unusual sale; a
+  human reviewer must approve or reject flagged reports. The LLM tier is off by default and cannot
+  clear a flag.
+- Tier 2 ML is intentionally disabled. There is no trained artifact, and the current development
+  database has far fewer comparable reports than the documented readiness threshold.
+- Report freshness uses the extracted sale time when present, otherwise the row's `created_at`.
+  The report schema is PKR/kg only; other currencies are excluded rather than converted.
+- Migration `0003_add_anomaly_review_fields` adds `observed_at`, `reviewed_at`, and `reviewed_by`.
+  Run `uv run alembic upgrade head` after pulling this change.
 - Identical reports are collapsed only inside the configurable short window. The schema has no
   durable idempotency key, so unrelated duplicate submissions outside that window are still
   counted separately.

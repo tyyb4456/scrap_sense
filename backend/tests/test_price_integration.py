@@ -17,7 +17,9 @@ from sqlalchemy import text
 from app.core.config import Settings
 from app.db.session import SessionLocal, engine
 from app.models.report import Report
+from app.schemas.report import AnomalyVerdict, ReportDraft
 from app.services.prices import PriceService
+from app.services.reports import save_report
 
 
 async def _require_postgres() -> None:
@@ -46,6 +48,9 @@ def report(
     price: str,
     picker_id: str,
     created_at: datetime,
+    status: str = "accepted",
+    is_anomalous: bool = False,
+    observed_at: datetime | None = None,
 ) -> Report:
     return Report(
         picker_id=picker_id,
@@ -56,11 +61,16 @@ def report(
         currency="PKR",
         city=city,
         area=area,
+        observed_at=observed_at,
         confidence=0.9,
-        is_anomalous=False,
-        anomaly_reason="Not enough data to evaluate.",
-        anomaly_method="deterministic",
-        status="accepted",
+        is_anomalous=is_anomalous,
+        anomaly_reason=(
+            "Price is a statistical outlier."
+            if is_anomalous
+            else "No anomaly detected."
+        ),
+        anomaly_method="mad",
+        status=status,
         created_at=created_at,
     )
 
@@ -112,6 +122,122 @@ async def test_postgres_repository_and_local_estimate() -> None:
             assert result.city_observation_count == 2
             assert result.freshness_days is not None
             assert result.freshness_days < 2
+        finally:
+            await session.rollback()
+            await engine.dispose()
+
+
+async def test_postgres_suspicious_reports_do_not_influence_the_estimate() -> None:
+    await _require_postgres()
+    unique = uuid.uuid4().hex
+    city = f"Review City {unique}"
+    area = f"Review Area {unique}"
+    now = datetime.now(UTC)
+
+    async with SessionLocal() as session:
+        try:
+            session.add_all(
+                [
+                    report(
+                        city=city,
+                        area=area,
+                        price="100",
+                        picker_id=f"review-picker-{unique}-1",
+                        created_at=now - timedelta(days=1),
+                    ),
+                    report(
+                        city=city,
+                        area=area,
+                        price="200",
+                        picker_id=f"review-picker-{unique}-2",
+                        created_at=now - timedelta(days=1),
+                    ),
+                    report(
+                        city=city,
+                        area=area,
+                        price="5000",
+                        picker_id=f"review-picker-{unique}-3",
+                        created_at=now - timedelta(days=1),
+                        status="flagged",
+                        is_anomalous=True,
+                    ),
+                    report(
+                        city=city,
+                        area=area,
+                        price="9000",
+                        picker_id=f"review-picker-{unique}-4",
+                        created_at=now - timedelta(days=1),
+                        is_anomalous=True,
+                    ),
+                    report(
+                        city=city,
+                        area=area,
+                        price="8000",
+                        picker_id=f"review-picker-{unique}-5",
+                        created_at=now - timedelta(days=1),
+                        status="rejected",
+                    ),
+                ]
+            )
+            await session.flush()
+
+            service = PriceService(
+                session=session,
+                settings=Settings(price_min_observations=2),
+            )
+            result = await service.estimate(
+                material="plastic",
+                location=city,
+                area=area,
+            )
+
+            assert result.source == "local_reports"
+            assert result.estimated_price_per_kg == 150.0
+            assert result.observation_count == 2
+            assert result.observed_max_price_per_kg == 200.0
+        finally:
+            await session.rollback()
+            await engine.dispose()
+
+
+async def test_postgres_observation_age_uses_reported_sale_time() -> None:
+    await _require_postgres()
+    unique = uuid.uuid4().hex
+    city = f"Timestamp City {unique}"
+    now = datetime.now(UTC)
+
+    async with SessionLocal() as session:
+        try:
+            session.add_all(
+                [
+                    report(
+                        city=city,
+                        area="Area",
+                        price="100",
+                        picker_id=f"time-picker-{unique}-1",
+                        created_at=now,
+                        observed_at=now - timedelta(days=200),
+                    ),
+                    report(
+                        city=city,
+                        area="Area",
+                        price="200",
+                        picker_id=f"time-picker-{unique}-2",
+                        created_at=now,
+                        observed_at=now - timedelta(days=200),
+                    ),
+                ]
+            )
+            await session.flush()
+
+            service = PriceService(
+                session=session,
+                settings=Settings(price_min_observations=2),
+            )
+            result = await service.estimate(material="plastic", location=city)
+
+            assert result.source == "unavailable"
+            assert result.estimated_price_per_kg is None
         finally:
             await session.rollback()
             await engine.dispose()
@@ -172,3 +298,56 @@ async def test_postgres_repository_falls_back_to_city_evidence() -> None:
         finally:
             await session.rollback()
             await engine.dispose()
+
+async def test_postgres_save_report_persists_a_suspicious_report_as_flagged() -> None:
+    await _require_postgres()
+    unique = uuid.uuid4().hex
+    city = f"Persist City {unique}"
+    now = datetime.now(UTC)
+    draft = ReportDraft(
+        material="plastic",
+        price_per_kg=Decimal("9999"),
+        quantity_kg=Decimal("2"),
+        currency="PKR",
+        unit="kg",
+        city=city,
+        area=f"Persist Area {unique}",
+        observed_at=now,
+    )
+    verdict = AnomalyVerdict(
+        is_anomalous=True,
+        reason="Price is a statistical outlier.",
+        method="mad",
+        confidence=0.75,
+        outcome="suspicious",
+        sample_size=5,
+    )
+
+    saved = await save_report(
+        picker_id=f"persist-picker-{unique}",
+        raw_text="integration fixture",
+        draft=draft,
+        verdict=verdict,
+    )
+    try:
+        async with SessionLocal() as session:
+            stored = await session.get(Report, saved.id)
+            assert stored is not None
+            assert stored.status == "flagged"
+            assert stored.is_anomalous is True
+            assert stored.observed_at is not None
+            assert stored.reviewed_at is None
+
+            service = PriceService(
+                session=session,
+                settings=Settings(price_min_observations=1),
+            )
+            estimate = await service.estimate(material="plastic", location=city)
+            assert estimate.source == "unavailable"
+    finally:
+        async with SessionLocal() as session:
+            stored = await session.get(Report, saved.id)
+            if stored is not None:
+                await session.delete(stored)
+                await session.commit()
+        await engine.dispose()

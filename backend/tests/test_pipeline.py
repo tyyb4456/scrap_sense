@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime
 from decimal import Decimal
-from typing import Any
+from typing import Any, cast
 from uuid import uuid4
 
 import pytest
@@ -10,6 +11,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 
 from app.schemas.report import AnomalyVerdict, FinalReport, LLMJudgment, ReportDraft
 from app.workflows import pipeline as pipeline_module
+from app.workflows.state import PipelineState
 
 
 class FakeModel:
@@ -20,9 +22,28 @@ class FakeModel:
         return self.value
 
 
+class AsyncFakeModel:
+    def __init__(self, value: Any) -> None:
+        self.value = value
+
+    async def ainvoke(self, _messages: Any) -> Any:
+        return self.value
+
+
 class ExplodingModel:
     def invoke(self, _messages: Any) -> Any:
         raise RuntimeError("provider secret")
+
+
+class ExplodingAsyncModel:
+    async def ainvoke(self, _messages: Any) -> Any:
+        raise RuntimeError("provider secret")
+
+
+class SlowAsyncModel:
+    async def ainvoke(self, _messages: Any) -> Any:
+        await asyncio.sleep(1)
+        return LLMJudgment(assessment="likely_bad_data", reason="too late", confidence=0.9)
 
 
 def valid_draft() -> ReportDraft:
@@ -34,9 +55,26 @@ def valid_draft() -> ReportDraft:
     )
 
 
+def verdict(
+    *,
+    is_anomalous: bool = False,
+    outcome: str = "pass",
+    reason: str = "Price is within the comparable range.",
+    method: str = "mad",
+    confidence: float = 0.6,
+) -> AnomalyVerdict:
+    return AnomalyVerdict(
+        is_anomalous=is_anomalous,
+        reason=reason,
+        method=method,
+        confidence=confidence,
+        outcome=outcome,  # type: ignore[arg-type]
+    )
+
+
 def final_report(
     draft: ReportDraft,
-    verdict: AnomalyVerdict,
+    result: AnomalyVerdict,
     *,
     picker_id: str = "user_123",
     raw_text: str = "sold 2kg copper at 500 per kg",
@@ -51,11 +89,12 @@ def final_report(
         currency=draft.currency,
         city=draft.city,
         area=draft.area,
+        observed_at=draft.observed_at,
         confidence=draft.confidence,
-        is_anomalous=verdict.is_anomalous,
-        anomaly_reason=verdict.reason,
-        anomaly_method=verdict.method,
-        status="flagged" if verdict.is_anomalous else "accepted",
+        is_anomalous=result.is_anomalous,
+        anomaly_reason=result.reason,
+        anomaly_method=result.method,
+        status="flagged" if result.is_anomalous else "accepted",
         created_at=datetime.now(UTC),
     )
 
@@ -83,17 +122,51 @@ def patch_save_report(
     monkeypatch.setattr(pipeline_module, "save_report", fake_save_report)
 
 
+def patch_statistical(
+    monkeypatch: pytest.MonkeyPatch,
+    result: AnomalyVerdict,
+    *,
+    calls: list[str] | None = None,
+) -> None:
+    async def fake_evaluate(_draft: ReportDraft, *, settings: Any) -> AnomalyVerdict:
+        if calls is not None:
+            calls.append("deterministic")
+        return result
+
+    monkeypatch.setattr(pipeline_module, "evaluate_report_statistical", fake_evaluate)
+
+
 def test_report_draft_extracts_structured_details(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     draft = valid_draft()
     monkeypatch.setattr(pipeline_module, "_extraction_model", lambda: FakeModel(draft))
+    stale = verdict(
+        is_anomalous=True,
+        outcome="suspicious",
+        reason="Stale flag from an earlier turn.",
+    )
 
     result = pipeline_module.report_draft(
-        {"messages": [HumanMessage(content="sold 2kg copper at 500 per kg")]}
+        {
+            "messages": [HumanMessage(content="sold 2kg copper at 500 per kg")],
+            "validation_result": None,
+            "deterministic_result": stale,
+            "ml_result": stale,
+            "llm_result": stale,
+            "verdict": stale,
+            "final_report": final_report(draft, stale),
+            "structured_response": final_report(draft, stale),
+        }
     )
 
     assert result["report_draft"] == draft
+    assert result["deterministic_result"] is None
+    assert result["ml_result"] is None
+    assert result["llm_result"] is None
+    assert result["verdict"] is None
+    assert result["final_report"] is None
+    assert result["structured_response"] is None
 
 
 def test_extraction_failure_falls_back_to_clarification(
@@ -112,81 +185,211 @@ def test_extraction_failure_falls_back_to_clarification(
 
 
 def test_validate_and_build_asks_for_missing_fields() -> None:
+    draft = ReportDraft(material="copper")
     result = pipeline_module.validate_and_build(
-        {"messages": [], "report_draft": ReportDraft(material="copper")}
+        {"messages": [], "report_draft": draft}
     )
 
     message = result["messages"][0]
     assert isinstance(message, AIMessage)
     assert "price per kg" in message.content
     assert "quantity in kg" in message.content
+    assert result["validation_result"].is_valid is False
+    assert "missing_price" in result["validation_result"].codes
+    assert "missing_quantity" in result["validation_result"].codes
+
+
+def test_validate_and_build_rejects_unsupported_currency() -> None:
+    draft = valid_draft().model_copy(
+        update={
+            "currency": "USD",
+            "clarification_question": "Could you clarify the sale details?",
+        }
+    )
+    result = pipeline_module.validate_and_build(
+        {"messages": [], "report_draft": draft}
+    )
+
+    assert result["validation_result"].is_valid is False
+    assert "unsupported_currency" in result["validation_result"].codes
+    assert "currency" in result["messages"][0].content
 
 
 def test_route_after_validation_stops_on_clarification() -> None:
+    invalid = pipeline_module.validate_and_build(
+        {"messages": [], "report_draft": ReportDraft(material="copper")}
+    )
+    valid = pipeline_module.validate_and_build(
+        {"messages": [], "report_draft": valid_draft()}
+    )
+
+    invalid_state = {
+        "messages": [],
+        "report_draft": ReportDraft(material="copper"),
+        "validation_result": invalid["validation_result"],
+    }
+    valid_state = {
+        "messages": [],
+        "report_draft": valid_draft(),
+        "validation_result": valid["validation_result"],
+    }
+
     assert (
-        pipeline_module.route_after_validation(
-            {"messages": [], "report_draft": ReportDraft(material="copper")}
-        )
-        == "end"
+        pipeline_module.route_after_validation(cast(PipelineState, invalid_state)) == "end"
     )
     assert (
-        pipeline_module.route_after_validation(
-            {"messages": [], "report_draft": valid_draft()}
-        )
+        pipeline_module.route_after_validation(cast(PipelineState, valid_state))
         == "deterministic_check"
     )
 
 
-def test_deterministic_and_ml_checks_are_neutral() -> None:
-    deterministic = pipeline_module.deterministic_check_node({"messages": []})[
-        "deterministic_result"
-    ]
-    ml = pipeline_module.ml_check_node({"messages": []})["ml_result"]
+async def test_deterministic_node_returns_the_statistical_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    expected = verdict(reason="Price is within the comparable range.")
+    patch_statistical(monkeypatch, expected)
 
-    assert deterministic.method == "deterministic"
-    assert deterministic.is_anomalous is False
-    assert ml.method == "ml"
-    assert ml.is_anomalous is False
-
-
-def test_llm_check_uses_judgment(monkeypatch: pytest.MonkeyPatch) -> None:
-    judgment = LLMJudgment(
-        is_anomalous=True,
-        reason="Price is far above the local range.",
-        confidence=0.8,
-    )
-    monkeypatch.setattr(pipeline_module, "_judge_model", lambda: FakeModel(judgment))
-
-    result = pipeline_module.llm_check_node(
+    result = await pipeline_module.deterministic_check_node(
         {"messages": [], "report_draft": valid_draft()}
     )
 
-    verdict = result["verdict"]
-    assert verdict.is_anomalous is True
-    assert verdict.method == "llm"
-    assert verdict.confidence == 0.8
+    assert result["deterministic_result"] == expected
+
+
+def test_ml_check_is_explicitly_disabled() -> None:
+    result = pipeline_module.ml_check_node({"messages": []})["ml_result"]
+
+    assert result.method == "ml"
+    assert result.is_anomalous is False
+    assert result.outcome == "disabled"
+
+
+async def test_llm_check_uses_judgment_but_retains_the_flag(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    judgment = LLMJudgment(
+        assessment="likely_legitimate",
+        reason="High-grade copper can legitimately sell above the median.",
+        confidence=0.8,
+    )
+    monkeypatch.setattr(pipeline_module, "_judge_model", lambda: AsyncFakeModel(judgment))
+    statistical = verdict(
+        is_anomalous=True,
+        outcome="suspicious",
+        reason="Price is a statistical outlier.",
+        confidence=0.7,
+    )
+
+    result = await pipeline_module.llm_check_node(
+        {
+            "messages": [],
+            "report_draft": valid_draft(),
+            "deterministic_result": statistical,
+        }
+    )
+
+    llm_result = result["llm_result"]
+    assert llm_result.is_anomalous is True
+    assert llm_result.method == "llm"
+    assert llm_result.confidence == 0.8
+    assert "likely_legitimate" in llm_result.reason
+    assert "Statistical flag retained" in llm_result.reason
+
+
+async def test_llm_failure_does_not_clear_a_statistical_flag(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        pipeline_module, "_judge_model", lambda: ExplodingAsyncModel()
+    )
+    statistical = verdict(
+        is_anomalous=True,
+        outcome="suspicious",
+        reason="Price is a statistical outlier.",
+    )
+
+    result = await pipeline_module.llm_check_node(
+        {
+            "messages": [],
+            "report_draft": valid_draft(),
+            "deterministic_result": statistical,
+        }
+    )
+
+    assert result["llm_result"].is_anomalous is True
+    assert "unavailable" in result["llm_result"].reason.lower()
+
+
+async def test_llm_timeout_does_not_clear_a_statistical_flag(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(pipeline_module, "_judge_model", lambda: SlowAsyncModel())
+    monkeypatch.setattr(pipeline_module.settings, "anomaly_llm_timeout_seconds", 0.01)
+    statistical = verdict(
+        is_anomalous=True,
+        outcome="suspicious",
+        reason="Price is a statistical outlier.",
+    )
+
+    result = await pipeline_module.llm_check_node(
+        {
+            "messages": [],
+            "report_draft": valid_draft(),
+            "deterministic_result": statistical,
+        }
+    )
+
+    assert result["llm_result"].is_anomalous is True
+    assert "timed out" in result["llm_result"].reason.lower()
+
+
+async def test_llm_malformed_output_does_not_clear_a_statistical_flag(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        pipeline_module, "_judge_model", lambda: AsyncFakeModel(object())
+    )
+    statistical = verdict(
+        is_anomalous=True,
+        outcome="suspicious",
+        reason="Price is a statistical outlier.",
+    )
+
+    result = await pipeline_module.llm_check_node(
+        {
+            "messages": [],
+            "report_draft": valid_draft(),
+            "deterministic_result": statistical,
+        }
+    )
+
+    assert result["llm_result"].is_anomalous is True
+    assert "unavailable" in result["llm_result"].reason.lower()
 
 
 def test_accept_reports_a_flagged_verdict() -> None:
-    verdict = pipeline_module.AnomalyVerdict(
+    flagged = verdict(
         is_anomalous=True,
+        outcome="suspicious",
         reason="Quantity looks wrong.",
         method="ml",
         confidence=0.9,
     )
 
     result = pipeline_module.accept_node(
-        {"messages": [], "report_draft": valid_draft(), "verdict": verdict}
+        {"messages": [], "report_draft": valid_draft(), "verdict": flagged}
     )
 
-    assert result["verdict"] == verdict
+    assert result["verdict"] == flagged
     assert "flagged" in result["messages"][0].content.lower()
+    assert "not affect prices" in result["messages"][0].content.lower()
 
 
 async def test_pipeline_accepts_a_valid_report(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(pipeline_module, "_extraction_model", lambda: FakeModel(valid_draft()))
+    patch_statistical(monkeypatch, verdict())
     patch_save_report(monkeypatch)
     graph = pipeline_module.build_pipeline()
 
@@ -197,8 +400,156 @@ async def test_pipeline_accepts_a_valid_report(
 
     assert result["report_draft"].material == "copper"
     assert result["verdict"].is_anomalous is False
+    assert result["deterministic_result"].outcome == "pass"
+    assert result["ml_result"].outcome == "disabled"
     assert "saved" in result["messages"][-1].content.lower()
     assert result["structured_response"].picker_id == "user_123"
+
+
+async def test_invalid_report_never_reaches_anomaly_or_llm_tiers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    invalid = ReportDraft(
+        material="copper",
+        price_per_kg=Decimal("-5"),
+        quantity_kg=Decimal("2"),
+        city="Multan",
+    )
+    calls: list[str] = []
+    monkeypatch.setattr(pipeline_module, "_extraction_model", lambda: FakeModel(invalid))
+    patch_statistical(monkeypatch, verdict(), calls=calls)
+    monkeypatch.setattr(
+        pipeline_module,
+        "_judge_model",
+        lambda: ExplodingAsyncModel(),
+    )
+    graph = pipeline_module.build_pipeline()
+
+    result = await graph.ainvoke(
+        {"messages": [HumanMessage(content="sold 2kg copper for minus 5")]},
+        {"configurable": {"thread_id": "user_123"}},
+    )
+
+    assert calls == []
+    assert result.get("deterministic_result") is None
+    assert result.get("ml_result") is None
+    assert result.get("llm_result") is None
+    assert result.get("final_report") is None
+    assert "price per kg" in result["messages"][-1].content
+
+
+async def test_ml_tier_is_reached_for_every_valid_report(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+    monkeypatch.setattr(pipeline_module, "_extraction_model", lambda: FakeModel(valid_draft()))
+    patch_statistical(monkeypatch, verdict(), calls=calls)
+
+    def fake_ml_check(_settings: Any) -> AnomalyVerdict:
+        calls.append("ml")
+        return verdict(method="ml", outcome="disabled")
+
+    monkeypatch.setattr(pipeline_module, "evaluate_ml_check", fake_ml_check)
+    graph = pipeline_module.build_pipeline()
+
+    await graph.ainvoke(
+        {"messages": [HumanMessage(content="sold 2kg copper at 500 per kg")]},
+        {"configurable": {"thread_id": "user_123"}},
+    )
+
+    assert calls == ["deterministic", "ml"]
+
+
+async def test_llm_tier_is_reachable_when_enabled_and_suspicious(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(pipeline_module, "_extraction_model", lambda: FakeModel(valid_draft()))
+    patch_statistical(
+        monkeypatch,
+        verdict(
+            is_anomalous=True,
+            outcome="suspicious",
+            reason="Price is a statistical outlier.",
+        ),
+    )
+    monkeypatch.setattr(pipeline_module.settings, "use_llm_reasoning", True)
+    monkeypatch.setattr(
+        pipeline_module,
+        "_judge_model",
+        lambda: AsyncFakeModel(
+            LLMJudgment(
+                assessment="likely_bad_data",
+                reason="The value is implausible for this context.",
+                confidence=0.9,
+            )
+        ),
+    )
+    patch_save_report(monkeypatch)
+    graph = pipeline_module.build_pipeline()
+
+    result = await graph.ainvoke(
+        {"messages": [HumanMessage(content="sold 2kg copper at 500 per kg")]},
+        {"configurable": {"thread_id": "user_123"}},
+    )
+
+    assert result["llm_result"].method == "llm"
+    assert result["verdict"].is_anomalous is True
+    assert result["structured_response"].status == "flagged"
+
+
+async def test_llm_tier_is_skipped_when_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(pipeline_module, "_extraction_model", lambda: FakeModel(valid_draft()))
+    patch_statistical(
+        monkeypatch,
+        verdict(
+            is_anomalous=True,
+            outcome="suspicious",
+            reason="Price is a statistical outlier.",
+        ),
+    )
+    monkeypatch.setattr(pipeline_module.settings, "use_llm_reasoning", False)
+    monkeypatch.setattr(pipeline_module, "_judge_model", lambda: ExplodingAsyncModel())
+    patch_save_report(monkeypatch)
+    graph = pipeline_module.build_pipeline()
+
+    result = await graph.ainvoke(
+        {"messages": [HumanMessage(content="sold 2kg copper at 500 per kg")]},
+        {"configurable": {"thread_id": "user_123"}},
+    )
+
+    assert result.get("llm_result") is None
+    assert result["verdict"].is_anomalous is True
+    assert result["structured_response"].status == "flagged"
+
+
+async def test_insufficient_evidence_accepts_without_pretending_to_verify(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(pipeline_module, "_extraction_model", lambda: FakeModel(valid_draft()))
+    patch_statistical(
+        monkeypatch,
+        verdict(
+            outcome="insufficient_evidence",
+            reason="Not enough comparable historical reports (1 < 5).",
+            confidence=0.0,
+        ),
+    )
+    patch_save_report(monkeypatch)
+    graph = pipeline_module.build_pipeline()
+
+    result = await graph.ainvoke(
+        {"messages": [HumanMessage(content="sold 2kg copper at 500 per kg")]},
+        {"configurable": {"thread_id": "user_123"}},
+    )
+
+    assert result["verdict"].outcome == "insufficient_evidence"
+    assert result["structured_response"].status == "accepted"
+    assert any(
+        "not enough comparable" in message.content.lower()
+        for message in result["messages"]
+    )
 
 
 async def test_finalize_report_persists_the_report(
@@ -207,28 +558,23 @@ async def test_finalize_report_persists_the_report(
     captured: dict[str, Any] = {}
     patch_save_report(monkeypatch, captured)
     draft = valid_draft()
-    verdict = pipeline_module.AnomalyVerdict(
-        is_anomalous=False,
-        reason="Price is within range.",
-        method="rules",
-        confidence=1.0,
-    )
+    result = verdict(reason="Price is within range.")
 
-    result = await pipeline_module.finalize_report_node(
+    output = await pipeline_module.finalize_report_node(
         {
             "messages": [HumanMessage(content="sold 2kg copper at 500 per kg")],
             "report_draft": draft,
-            "verdict": verdict,
+            "verdict": result,
         },
         {"configurable": {"thread_id": "picker-42"}},
     )
 
     assert captured["picker_id"] == "picker-42"
     assert captured["draft"] == draft
-    assert captured["verdict"] == verdict
-    assert result["final_report"].material == "copper"
-    assert result["structured_response"] == result["final_report"]
-    assert "saved" in result["messages"][0].content.lower()
+    assert captured["verdict"] == result
+    assert output["final_report"].material == "copper"
+    assert output["structured_response"] == output["final_report"]
+    assert "saved" in output["messages"][0].content.lower()
 
 
 async def test_finalize_report_prefers_authenticated_picker_id(
@@ -241,12 +587,7 @@ async def test_finalize_report_prefers_authenticated_picker_id(
         {
             "messages": [HumanMessage(content="sold 2kg copper at 500 per kg")],
             "report_draft": valid_draft(),
-            "verdict": pipeline_module.AnomalyVerdict(
-                is_anomalous=False,
-                reason="Price is within range.",
-                method="rules",
-                confidence=1.0,
-            ),
+            "verdict": verdict(reason="Price is within range."),
         },
         {"configurable": {"thread_id": "thread-1", "picker_id": "user_123"}},
     )
@@ -255,7 +596,7 @@ async def test_finalize_report_prefers_authenticated_picker_id(
 
 
 async def test_finalize_report_skips_an_incomplete_draft() -> None:
-    result = await pipeline_module.finalize_report_node(
+    output = await pipeline_module.finalize_report_node(
         {
             "messages": [HumanMessage(content="sold copper")],
             "report_draft": ReportDraft(material="copper"),
@@ -263,8 +604,8 @@ async def test_finalize_report_skips_an_incomplete_draft() -> None:
         {"configurable": {"thread_id": "picker-42"}},
     )
 
-    assert "final_report" not in result
-    assert "could not build" in result["messages"][0].content.lower()
+    assert "final_report" not in output
+    assert "could not build" in output["messages"][0].content.lower()
 
 
 async def test_pipeline_asks_for_clarification(
@@ -278,6 +619,6 @@ async def test_pipeline_asks_for_clarification(
         {"messages": [HumanMessage(content="sold 2kg copper")]}
     )
 
-    assert "verdict" not in result
-    assert "final_report" not in result
+    assert result.get("verdict") is None
+    assert result.get("final_report") is None
     assert "price per kg" in result["messages"][-1].content

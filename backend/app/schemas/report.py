@@ -11,16 +11,34 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
+AnomalyOutcome = Literal[
+    "pass",
+    "suspicious",
+    "insufficient_evidence",
+    "unavailable",
+    "disabled",
+    "error",
+]
+
 
 class ReportDraft(BaseModel):
+    """Structured extraction; semantic validity is decided by validation code.
+
+    Numeric and currency/unit constraints are deliberately permissive here so a
+    malformed extraction reaches :mod:`app.services.report_validation` and gets
+    a specific clarification question instead of an opaque provider error.
+    """
+
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
     material: str | None = Field(default=None, max_length=100)
-    price_per_kg: Decimal | None = Field(default=None, gt=0, max_digits=12, decimal_places=2)
-    quantity_kg: Decimal | None = Field(default=None, gt=0, max_digits=12, decimal_places=3)
-    currency: str = Field(default="PKR", min_length=3, max_length=3)
+    price_per_kg: Decimal | None = None
+    quantity_kg: Decimal | None = None
+    currency: str = Field(default="PKR", max_length=10)
+    unit: str = Field(default="kg", max_length=20)
     city: str | None = Field(default=None, max_length=100)
     area: str | None = Field(default=None, max_length=100)
+    observed_at: datetime | None = None
     confidence: float | None = Field(default=None, ge=0, le=1)
     needs_clarification: bool = False
     clarification_question: str | None = Field(default=None, max_length=500)
@@ -35,6 +53,20 @@ class ReportCreate(BaseModel):
 
 class ReportStatusUpdate(BaseModel):
     status: Literal["accepted", "flagged", "rejected"]
+
+
+class ReportReviewRequest(BaseModel):
+    """Admin review action. Approval makes a suspicious report eligible again."""
+
+    status: Literal["accepted", "rejected"]
+
+
+class ReportReviewResponse(BaseModel):
+    id: UUID
+    status: Literal["accepted", "rejected"]
+    is_anomalous: bool
+    reviewed_at: datetime
+    reviewed_by: str
 
 
 class ReportRead(BaseModel):
@@ -66,13 +98,24 @@ class ReportSubmissionResponse(BaseModel):
 
 
 class AnomalyVerdict(BaseModel):
-    """Outcome of anomaly detection evaluation."""
+    """Outcome of anomaly detection evaluation.
+
+    ``is_anomalous`` is retained for persistence and price eligibility.
+    ``outcome`` makes the difference between a clean pass, a suspicious report,
+    and a check that could not be completed explicit. A report is never treated
+    as fraud by this model; ``suspicious`` means "needs review".
+    """
+
     model_config = ConfigDict(use_enum_values=True)
 
     is_anomalous: bool
     reason: str
-    method: str  # "deterministic" | "ml" | "llm"
+    method: str  # "validation" | "mad" | "ml" | "llm"
     confidence: float = Field(ge=0.0, le=1.0, default=1.0)
+    outcome: AnomalyOutcome = "pass"
+    sample_size: int = Field(default=0, ge=0)
+    median_price_per_kg: Decimal | None = None
+    mad_price_per_kg: Decimal | None = None
 
 
 class FinalReport(BaseModel):
@@ -89,16 +132,23 @@ class FinalReport(BaseModel):
     currency: str
     city: str | None
     area: str | None
+    observed_at: datetime | None = None
     confidence: float | None
     is_anomalous: bool
     anomaly_reason: str
     anomaly_method: str
-    status: Literal["accepted", "flagged"]
+    status: Literal["accepted", "flagged", "rejected"]
+    reviewed_at: datetime | None = None
     created_at: datetime
 
 
 class LLMJudgment(BaseModel):
-    """Schema the LLM judge fills in."""
-    is_anomalous: bool
-    reason: str
+    """Contextual assessment schema.
+
+    The model deliberately has no ability to approve a report: a statistical
+    flag is always retained for a human reviewer.
+    """
+
+    assessment: Literal["likely_legitimate", "uncertain", "likely_bad_data"] = "uncertain"
+    reason: str = Field(max_length=500)
     confidence: float = Field(ge=0.0, le=1.0, default=0.7)

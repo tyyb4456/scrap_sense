@@ -41,6 +41,7 @@ class Report(Base):
     )
     city: Mapped[str | None] = mapped_column(String(100))
     area: Mapped[str | None] = mapped_column(String(100))
+    observed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     confidence: Mapped[float | None] = mapped_column(Float)
 
     is_anomalous: Mapped[bool] = mapped_column(
@@ -51,6 +52,14 @@ class Report(Base):
     status: Mapped[str] = mapped_column(
         String(20), nullable=False, default="accepted", server_default="accepted", index=True
     )
+
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    reviewed_by: Mapped[str | None] = mapped_column(String(128))
+
+    @property
+    def effective_observed_at(self) -> datetime:
+        """Use the reported sale time when present, else the save time."""
+        return self.observed_at or self.created_at
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()

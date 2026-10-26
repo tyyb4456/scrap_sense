@@ -59,11 +59,15 @@ Built today:
 - Final reports persisted to PostgreSQL, attributed to the picker id (never the thread id).
 - Deterministic price estimates from eligible reports with local -> city -> seed fallback, an
   authenticated `GET /api/v1/prices/estimate` endpoint, and a frontend price-check dialog.
-- Placeholder deterministic / ML anomaly tiers returning neutral verdicts.
+- Deterministic intake validation plus a conservative median/MAD anomaly tier over comparable
+  reports. Suspicious reports are persisted as `flagged`, excluded from estimates, and can only
+  return to the eligible pool through a reviewer-only approval endpoint.
+- An optional LLM review of statistically suspicious reports that cannot clear a statistical flag.
 
-Explicitly not built yet: verified seeded field prices (the loader and empty file exist),
-trained anomaly models, the material classifier CNN, forecasting, reporter reputation, and the
-coordinator's offline gap-analysis loop.
+Explicitly not built yet: verified seeded field prices (the loader and empty file exist), a trained
+anomaly model (Tier 2 is disabled until real data satisfies the documented readiness threshold), the
+material classifier CNN, forecasting, reporter reputation, and the coordinator's offline
+gap-analysis loop.
 
 Constraints and terminology:
 
