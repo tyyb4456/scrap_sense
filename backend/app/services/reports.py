@@ -17,6 +17,17 @@ from app.services.report_validation import validate_report_draft
 REPORT_STATUS_ACCEPTED = "accepted"
 REPORT_STATUS_FLAGGED = "flagged"
 REPORT_STATUS_REJECTED = "rejected"
+REPORT_STATUSES = frozenset(
+    {REPORT_STATUS_ACCEPTED, REPORT_STATUS_FLAGGED, REPORT_STATUS_REJECTED}
+)
+
+
+class ReportReviewConflict(Exception):
+    """The report is not in a state that permits a human review decision."""
+
+    def __init__(self, current_status: str) -> None:
+        self.current_status = current_status
+        super().__init__(f"report status {current_status!r} cannot be reviewed")
 
 
 async def save_report(
@@ -137,6 +148,44 @@ async def fetch_comparable_reports(
     return list(result.scalars())
 
 
+async def list_reports_for_review(
+    session: AsyncSession,
+    *,
+    status: str,
+    offset: int,
+    limit: int,
+) -> tuple[list[Report], int]:
+    """Return one page of reports and the matching total for reviewer use.
+
+    Ordering is oldest first, with the report id as a stable tie-breaker so
+    pagination cannot skip or repeat a row. No relationships are loaded, so a
+    page costs two queries regardless of its size.
+    """
+    if status not in REPORT_STATUSES:
+        raise ValueError("unsupported report status")
+
+    condition = Report.status == status
+    total = await session.scalar(select(func.count(Report.id)).where(condition))
+    statement = (
+        select(Report)
+        .where(condition)
+        .order_by(Report.created_at.asc(), Report.id.asc())
+        .offset(offset)
+        .limit(limit)
+    )
+    result = await session.execute(statement)
+    return list(result.scalars()), int(total or 0)
+
+
+async def get_report_for_review(
+    session: AsyncSession,
+    *,
+    report_id: UUID,
+) -> Report | None:
+    """Load one report for the reviewer detail view."""
+    return await session.get(Report, report_id)
+
+
 async def review_report(
     session: AsyncSession,
     *,
@@ -144,18 +193,27 @@ async def review_report(
     reviewer_id: str,
     status: str,
 ) -> Report | None:
-    """Approve or reject a report after human review.
+    """Approve or reject a flagged report after human review.
 
-    Approval clears the active anomaly flag so the report can influence price
-    aggregation again. Rejection keeps the row for audit but excludes it by
-    status. Original anomaly evidence is not erased.
+    Only a ``flagged`` report can receive a human decision. Approval clears the
+    active anomaly flag so the report can influence price aggregation again if
+    every other eligibility rule still passes. Rejection keeps the row for audit
+    but excludes it by status. Original anomaly evidence is not erased.
+
+    The row is locked for the duration of the decision so two reviewers cannot
+    apply conflicting transitions to the same report.
     """
     if status not in {REPORT_STATUS_ACCEPTED, REPORT_STATUS_REJECTED}:
         raise ValueError("review status must be accepted or rejected")
 
-    report = await session.get(Report, report_id)
+    report = await session.get(Report, report_id, with_for_update=True)
     if report is None:
         return None
+
+    current_status = report.status
+    if current_status != REPORT_STATUS_FLAGGED:
+        await session.rollback()
+        raise ReportReviewConflict(current_status)
 
     report.status = status
     report.reviewed_at = datetime.now(UTC)

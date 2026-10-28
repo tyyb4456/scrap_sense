@@ -17,7 +17,9 @@ Included:
 - An LLM extraction step plus deterministic validation in the intake pipeline
 - A conservative median/MAD anomaly check over comparable historical reports
 - Suspicious reports persisted as `flagged` and excluded from price aggregation pending review
-- A reviewer-only endpoint to approve or reject a flagged report
+- Reviewer-only flagged-report queue with pagination and a stable oldest-first order
+- A reviewer-only endpoint to approve or reject a flagged report, with explicit state transitions
+- A reviewer queue UI at `/review` with confirmation before approval or rejection
 - Final reports persisted to the PostgreSQL `reports` table
 - Deterministic price estimates from eligible reports, with local -> city -> seed fallback
 - A `GET /api/v1/prices/estimate` endpoint and a frontend price-check dialog
@@ -38,22 +40,21 @@ Not included yet:
 backend/
   app/
     agents/              Main coordinator agent and intake subagent
-    api/routes/          Chat and health routes
-    auth/                Clerk request verification and dependencies
+    api/routes/          Chat, price, health, and reviewer report routes
+    auth/                Clerk request verification and reviewer dependency
     core/                Environment-driven settings
     db/                  SQLAlchemy engine and session factory
     models/              SQLAlchemy models for reports and user-owned chat threads
     schemas/             Chat, price, and report schemas
-    services/            Report, chat-thread, and chat-history persistence
+    services/            Report, review, price, chat-thread, and history logic
     tools/               Price-estimator tool used by the main agent
     workflows/           Intake/anomaly LangGraph pipeline and state
   alembic/               Migration environment for application tables
-  tests/                 Unit and API tests
-  run.py                 Dev server runner with a psycopg-compatible event loop
+  tests/                 Unit, API, and PostgreSQL integration tests
 frontend/
   src/
-    components/          Chat UI
-    lib/                 Typed chat API client and Clerk token helper
+    components/          Chat UI and reviewer queue
+    lib/                 Typed API client and Clerk token helper
 docker-compose.yml       Local PostgreSQL
 ```
 
@@ -69,8 +70,12 @@ Set-Location backend
 Copy-Item .env.example .env
 uv sync
 uv run alembic upgrade head
-uv run python run.py
+uv run uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload --loop app.loops:selector_loop_factory
 ```
+
+On Windows, `--loop app.loops:selector_loop_factory` selects the selector event loop required by
+the async psycopg connections used by the LangGraph checkpointer. On Linux/macOS the default loop
+works, so `uv run uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload` is sufficient.
 
 In a second terminal:
 
@@ -81,11 +86,8 @@ npm install
 npm run dev
 ```
 
-The API is served at `http://127.0.0.1:8000` and the UI at `http://localhost:5173`.
-
-Use `run.py` rather than calling `uvicorn` directly. On Windows, uvicorn's default Proactor
-event loop is incompatible with async psycopg, which the Postgres checkpointer uses; `run.py`
-selects a compatible loop for every platform.
+The API is served at `http://127.0.0.1:8000` and the UI at `http://localhost:5173`. The reviewer
+queue is available at `http://localhost:5173/review` for Clerk users listed in `ADMIN_USER_IDS`.
 
 ## Clerk setup
 
@@ -232,12 +234,29 @@ Example shape:
 }
 ```
 
-Report review (reviewer-only):
+Report review (reviewer-only; every route requires a Clerk session whose `sub` is listed in
+`ADMIN_USER_IDS`):
 
+- `GET /api/v1/reports?status=flagged&page=1&page_size=20` returns a paginated queue. `status`
+  accepts `flagged` (default), `accepted`, or `rejected`; `page` starts at 1; `page_size` is bounded
+  to 1–100. Rows are ordered oldest first with the report id as a stable tie-breaker. The response
+  includes `items`, `page`, `page_size`, `total`, `pages`, and `has_more`.
+- `GET /api/v1/reports/{report_id}` returns the same review projection for one report, or `404`.
 - `PATCH /api/v1/reports/{report_id}/review` with `{"status": "accepted"}` or
-  `{"status": "rejected"}`. The Clerk user must be listed in `ADMIN_USER_IDS`. Approval clears the
-  active anomaly flag and makes the report eligible for price aggregation; rejection keeps the row
-  but excludes it by status. There is no public report-review UI yet.
+  `{"status": "rejected"}`. Only a `flagged` report can be decided. Approval clears the anomaly flag
+  and makes the report eligible for aggregation only if every other existing eligibility rule
+  still passes. Rejection keeps the row for audit but excludes it by status. Repeating a decision,
+  or reviewing an already accepted/rejected report, returns `409`.
+
+The queue projection deliberately omits picker identity, Clerk identifiers, raw picker text, and
+thread information. It includes the material, quantity, reported PKR/kg price, currency/unit,
+city/area, observation and creation timestamps, status, anomaly method, and the stored anomaly
+reason (which contains the median/MAD evidence). There is no public reports endpoint.
+
+The frontend reviewer screen is at `/review`. It fetches the flagged queue, shows loading, empty,
+access-denied, and error states, requires a confirmation dialog before approving or rejecting, and
+refreshes the queue after a successful decision. Backend authorization is the security boundary;
+the frontend only handles `401`/`403` responses.
 
 ## Report trust and anomaly policy
 

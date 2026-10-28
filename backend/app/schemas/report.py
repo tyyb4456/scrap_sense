@@ -20,6 +20,8 @@ AnomalyOutcome = Literal[
     "error",
 ]
 
+ReportStatus = Literal["accepted", "flagged", "rejected"]
+
 
 class ReportDraft(BaseModel):
     """Structured extraction; semantic validity is decided by validation code.
@@ -58,6 +60,8 @@ class ReportStatusUpdate(BaseModel):
 class ReportReviewRequest(BaseModel):
     """Admin review action. Approval makes a suspicious report eligible again."""
 
+    model_config = ConfigDict(extra="forbid")
+
     status: Literal["accepted", "rejected"]
 
 
@@ -67,6 +71,49 @@ class ReportReviewResponse(BaseModel):
     is_anomalous: bool
     reviewed_at: datetime
     reviewed_by: str
+
+
+class ReportQueueItem(BaseModel):
+    """Review-facing report projection.
+
+    This deliberately omits picker identity, Clerk identifiers, raw picker text,
+    and thread information. ``confidence`` is the extraction confidence stored
+    with the report, not an anomaly probability; the statistical evidence is in
+    ``anomaly_reason`` and ``anomaly_method``.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    material: str
+    quantity_kg: float
+    price_per_kg: float
+    currency: str
+    unit: Literal["kg"] = "kg"
+    city: str | None
+    area: str | None
+    observed_at: datetime | None
+    created_at: datetime
+    status: ReportStatus
+    is_anomalous: bool
+    anomaly_method: str
+    anomaly_reason: str
+    confidence: float | None = Field(
+        default=None,
+        description="Extraction confidence recorded with the report, not an anomaly score.",
+    )
+    reviewed_at: datetime | None = None
+
+
+class ReportQueueResponse(BaseModel):
+    """Paginated reviewer queue. Oldest reports are returned first."""
+
+    items: list[ReportQueueItem]
+    page: int = Field(ge=1)
+    page_size: int = Field(ge=1)
+    total: int = Field(ge=0)
+    pages: int = Field(ge=0)
+    has_more: bool
 
 
 class ReportRead(BaseModel):

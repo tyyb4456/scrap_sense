@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from typing import Any
 from uuid import uuid4
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.api.routes import reports as reports_route
@@ -14,7 +15,7 @@ from app.core.config import Settings, get_settings
 from app.db.session import get_session
 from app.main import app
 from app.models.report import Report
-from app.services.reports import review_report
+from app.services.reports import ReportReviewConflict, review_report
 
 USER = ClerkUser(user_id="reviewer_1", session_id="sess_1", claims={})
 REPORT_ID = uuid4()
@@ -25,12 +26,16 @@ class FakeSession:
     def __init__(self, report: Report | None) -> None:
         self.report = report
         self.committed = False
+        self.rolled_back = False
 
-    async def get(self, _model: Any, _id: Any) -> Report | None:
+    async def get(self, _model: Any, _id: Any, **_kwargs: Any) -> Report | None:
         return self.report
 
     async def commit(self) -> None:
         self.committed = True
+
+    async def rollback(self) -> None:
+        self.rolled_back = True
 
     async def refresh(self, _report: Any) -> None:
         return None
@@ -87,6 +92,25 @@ async def test_rejection_keeps_the_row_but_excludes_it_by_status() -> None:
     assert result.status == "rejected"
     assert result.is_anomalous is True
     assert result.reviewed_at is not None
+
+
+async def test_already_decided_reports_cannot_be_reviewed_again() -> None:
+    session = FakeSession(report_model(status="accepted", is_anomalous=False))
+
+    with pytest.raises(ReportReviewConflict) as raised:
+        await review_report(
+            session,  # type: ignore[arg-type]
+            report_id=REPORT_ID,
+            reviewer_id="reviewer_1",
+            status="rejected",
+        )
+
+    assert raised.value.current_status == "accepted"
+    assert session.rolled_back is True
+    assert session.committed is False
+    assert session.report is not None
+    assert session.report.status == "accepted"
+    assert session.report.is_anomalous is False
 
 
 def clear_overrides() -> None:

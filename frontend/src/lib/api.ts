@@ -62,6 +62,16 @@ export interface PriceEstimateQuery {
   area?: string
 }
 
+export class ApiError extends Error {
+  readonly status: number
+
+  constructor(message: string, status: number) {
+    super(message)
+    this.name = 'ApiError'
+    this.status = status
+  }
+}
+
 async function request<T>(path: string, token: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {
     ...init,
@@ -87,7 +97,7 @@ async function request<T>(path: string, token: string, init?: RequestInit): Prom
     } catch {
       // Keep the generic message when the response is not JSON.
     }
-    throw new Error(detail)
+    throw new ApiError(detail, response.status)
   }
 
   if (response.status === 204) {
@@ -145,6 +155,78 @@ export function getPriceEstimate(
   }
 
   return request<PriceEstimate>(`/prices/estimate?${params.toString()}`, token)
+}
+
+export type ReportStatus = 'accepted' | 'flagged' | 'rejected'
+export type ReportReviewDecision = 'accepted' | 'rejected'
+
+export interface ReportQueueItem {
+  id: string
+  material: string
+  quantity_kg: number
+  price_per_kg: number
+  currency: string
+  unit: 'kg'
+  city: string | null
+  area: string | null
+  observed_at: string | null
+  created_at: string
+  status: ReportStatus
+  is_anomalous: boolean
+  anomaly_method: string
+  anomaly_reason: string
+  confidence: number | null
+  reviewed_at: string | null
+}
+
+export interface ReportQueueResponse {
+  items: ReportQueueItem[]
+  page: number
+  page_size: number
+  total: number
+  pages: number
+  has_more: boolean
+}
+
+export interface ReportReviewResponse {
+  id: string
+  status: ReportReviewDecision
+  is_anomalous: boolean
+  reviewed_at: string
+  reviewed_by: string
+}
+
+export interface ReportQueueQuery {
+  status?: ReportStatus
+  page?: number
+  pageSize?: number
+}
+
+export function listReports(
+  token: string,
+  query: ReportQueueQuery = {},
+): Promise<ReportQueueResponse> {
+  const params = new URLSearchParams({
+    status: query.status ?? 'flagged',
+    page: String(query.page ?? 1),
+    page_size: String(query.pageSize ?? 20),
+  })
+  return request<ReportQueueResponse>(`/reports?${params.toString()}`, token)
+}
+
+export function reviewReport(
+  token: string,
+  reportId: string,
+  decision: ReportReviewDecision,
+): Promise<ReportReviewResponse> {
+  return request<ReportReviewResponse>(
+    `/reports/${encodeURIComponent(reportId)}/review`,
+    token,
+    {
+      method: 'PATCH',
+      body: JSON.stringify({ status: decision }),
+    },
+  )
 }
 
 export function errorMessage(error: unknown): string {

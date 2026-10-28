@@ -6,9 +6,12 @@
   UserButton,
 } from '@clerk/react'
 import { Chat } from './components/Chat'
+import { ReviewQueue } from './components/review/ReviewQueue'
 import { ThemeToggle } from './components/ThemeToggle'
 import { ArrowRightIcon, ShieldIcon, TagMark } from './components/chat/icons'
 import { demoMode, landingMode } from './lib/demoMode'
+
+const reviewMode = window.location.pathname.replace(/\/+$/, '').endsWith('/review')
 
 const sampleRows = [
   { material: 'Plastic', detail: '2 kg · mixed bottles', paid: 'Rs 300' },
@@ -138,6 +141,25 @@ function Landing() {
 function App() {
   if (demoMode) {
     return <Chat demo />
+  }
+
+  if (reviewMode) {
+    return (
+      <>
+        <ClerkLoading>
+          <BootScreen />
+        </ClerkLoading>
+        <ClerkLoaded>
+          <Show when="signed-in" fallback={<Landing />}>
+            <ReviewQueue
+              accountSlot={
+                <UserButton appearance={{ elements: { avatarBox: 'h-7 w-7' } }} />
+              }
+            />
+          </Show>
+        </ClerkLoaded>
+      </>
+    )
   }
 
   if (landingMode) {

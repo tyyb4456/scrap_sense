@@ -211,6 +211,17 @@ function SidebarContent({
           </div>
           <ThemeToggle className="-mr-1" />
         </div>
+        {!demo ? (
+          <a
+            href="/review"
+            aria-label="Open reviewer queue"
+            className="clay-row mt-2 flex min-h-11 items-center gap-2 px-3 py-2 text-[12px] font-medium text-ink"
+          >
+            <ShieldIcon className="h-3.5 w-3.5 shrink-0 text-muted" />
+            <span className="min-w-0 flex-1 truncate">Review queue</span>
+            <ArrowRightIcon className="h-3.5 w-3.5 shrink-0 text-muted" />
+          </a>
+        ) : null}
       </div>
     </div>
   )
