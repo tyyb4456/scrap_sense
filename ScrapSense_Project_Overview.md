@@ -2,6 +2,11 @@
 
 A price-transparency tool for waste pickers, built as an agentic AI system with a deliberate mix of LLM reasoning and deterministic code.
 
+**Document map:** this file is the product/architecture spec. `README.md` is the setup and API
+reference, `PRODUCT.md` is the product brief, and `IMPLEMENTATION_STATUS.md` is the detailed
+current-state audit. When they disagree, this file defines intent and the audit defines what is
+actually built.
+
 ---
 
 ## 1. The Problem
@@ -99,8 +104,8 @@ LLM reasoning is reserved for genuine judgment calls: parsing messy/ambiguous in
 
 | Model | Purpose | Status |
 |---|---|---|
-| **CNN** (MobileNetV2 / EfficientNet-Lite) | Material classification from a photo (secondary feature) | Fine-tune on a public dataset (e.g. Kaggle garbage classification); export to TFLite/ONNX for offline use |
-| **Isolation Forest** | Multivariate anomaly detection — catches price+quantity combinations that look wrong together even when price alone looks fine | Needs ~50+ real pooled reports before it's meaningful; sits dormant (skipped, not guessed) until then |
+| **CNN** (MobileNetV2 / EfficientNet-Lite) | Material classification from a photo (secondary feature) | **Not started.** Fine-tune on a public dataset (e.g. Kaggle garbage classification); export to TFLite/ONNX for offline use |
+| **Isolation Forest** | Multivariate anomaly detection — catches price+quantity combinations that look wrong together even when price alone looks fine | **Interface only.** The documented readiness gate is 200 accepted comparable reports across at least three materials and two cities; no model is trained, so Tier 2 stays disabled (skipped, not guessed) |
 | **RNN/LSTM** (forecasting) | Would eventually replace the simple statistical price-estimator with real trend learning across time | **Not built.** With only a handful of early reports, an RNN would just memorize noise. The deterministic fallback chain is the correct MVP; this is a week 3–4 upgrade once there's real report volume |
 
 ---
@@ -128,14 +133,15 @@ There's no existing dataset for "fair scrap prices by material and region" — i
 
 ## 7. Tech Stack
 
-- **Backend:** FastAPI, Python 3.11+
-- **Orchestration:** LangGraph
-- **ML:** PyTorch (CNN), scikit-learn (Isolation Forest)
-- **Frontend:** React + TypeScript + Vite, Clerk-authenticated chat UI; voice-first remains
-  the target given the literacy/connectivity constraints
-- **Data:** PostgreSQL-backed LangGraph checkpoints, long-term store, finalized report rows, and
-  deterministic price aggregation today; the seed-price loader/config exists, but no verified
-  seed entries have been collected yet
+- **Backend:** FastAPI, Python 3.12+
+- **Orchestration:** LangGraph, with Deep Agents (`deepagents`) for the coordinator/subagent layer
+- **ML:** scikit-learn is declared for the future Isolation Forest, but no model is trained or
+  loaded yet; PyTorch is not a dependency because the classifier does not exist
+- **Frontend:** React + TypeScript + Vite, Clerk-authenticated chat UI, price-check dialog, and
+  reviewer queue; voice-first remains the target given the literacy/connectivity constraints
+- **Data:** PostgreSQL-backed LangGraph checkpoints, long-term store, finalized report rows,
+  deterministic median/MAD Tier 1, and deterministic local → city → seed price aggregation today;
+  the seed-price loader/config exists, but no verified seed entries have been collected yet
 
 ---
 
@@ -146,40 +152,58 @@ There's no existing dataset for "fair scrap prices by material and region" — i
 - **Week 3:** Secondary CNN classifier + offline export (TFLite/ONNX) + voice interface (Urdu) + begin real field testing with pickers
 - **Week 4:** Iterate on field feedback, polish, demo video, documentation
 
+**Status (2026-10-29):** the intake, validation, Tier 1, Tier 3, persistence, price aggregation,
+price API/UI, and reviewer flow are built. Seed data, the Tier 2 model, the classifier, voice,
+forecasting, and the offline gap-analysis loop are not. See §9 and `IMPLEMENTATION_STATUS.md`.
+
 ---
 
-## 9. What's Already Built (as of this document)
+## 9. What's Already Built (as of 2026-10-29)
 
-- ✅ `backend/app/agents/main_agent.py` — coordinator Deep Agent with per-Clerk-user
+- ✓ `backend/app/agents/main_agent.py` — coordinator Deep Agent with per-Clerk-user
   memory, the intake subagent, and the price tool wired in
-- ✅ `backend/app/api/routes/chat.py` — picker-facing chat endpoints protected by Clerk auth:
+- ✓ `backend/app/api/routes/chat.py` — picker-facing chat endpoints protected by Clerk auth:
   send, create/list threads, load history, and delete a thread
-- ✅ `backend/app/services/chat_threads.py` — server-owned conversation threads in the PostgreSQL
+- ✓ `backend/app/services/chat_threads.py` — server-owned conversation threads in the PostgreSQL
   `chat_threads` table; every read/write is scoped to the authenticated picker id
-- ✅ `backend/app/workflows/pipeline.py` — LLM extraction + deterministic validation, the
-  graph wiring for the anomaly stages, and final-report persistence
-- ✅ `backend/app/services/reports.py` — finalized reports stored in the PostgreSQL
-  `reports` table, attributed to the authenticated picker id rather than the thread id
-- ✅ `backend/app/services/prices.py` — deterministic local -> city -> seed price
-  aggregation over eligible reports, exposed by `GET /api/v1/prices/estimate`
-- ✅ `backend/app/tools/price_estimator.py` — chat tool backed by the same service
-- ✅ `backend/app/api/routes/health.py` — liveness and database readiness
-- ✅ PostgreSQL persistence — `AsyncPostgresSaver` checkpoints and `AsyncPostgresStore`
-  memory, initialized on first chat request
-- ✅ Frontend chat UI — Clerk sign-in, server-backed thread switching, new-chat creation,
+- ✓ `backend/app/workflows/pipeline.py` — LLM extraction + deterministic validation, the
+  graph wiring for all three anomaly stages, and final-report persistence
+- ✓ `backend/app/services/report_validation.py` — deterministic intake validation that rejects
+  malformed/unsupported reports and asks one clarification question instead of guessing
+- ✓ `backend/app/services/reports.py` — finalized reports stored in the PostgreSQL
+  `reports` table, attributed to the authenticated picker id rather than the thread id; also the
+  bounded read path for pricing and the reviewer queue/detail/decision operations
+- ✓ `backend/app/services/prices.py` + `price_aggregation.py` — deterministic
+  local → city → city seed → national seed → `unavailable` aggregation over eligible reports,
+  exposed by `GET /api/v1/prices/estimate`; sources are never blended
+- ✓ `backend/app/tools/price_estimator.py` — chat tool backed by the same service
+- ✓ `backend/app/api/routes/health.py` — liveness and database readiness
+- ✓ PostgreSQL persistence — `AsyncPostgresSaver` checkpoints and `AsyncPostgresStore`
+  memory, initialized on first chat request; Alembic migrations through
+  `0003_add_anomaly_review_fields`
+- ✓ Frontend chat UI — Clerk sign-in, server-backed thread switching, new-chat creation,
   history restoration, and thread deletion
-- ✅ Anomaly Tier 1 — deterministic validation plus a conservative median/MAD comparison over
-  comparable accepted reports; suspicious reports are persisted as `flagged`, excluded from
-  estimates, and reviewable through `PATCH /api/v1/reports/{id}/review`
-- ⬜ Anomaly Tier 2 — interface and data-readiness gate exist in
+- ✓ Frontend price check — `PriceCheck.tsx` shows the median, observed range, evidence scope,
+  counts, freshness, quality, seed provenance, and limitations; a null estimate is shown as
+  "no trustworthy estimate", never as zero
+- ✓ Anomaly Tier 1 — deterministic validation plus a conservative median/MAD comparison over
+  comparable accepted reports; suspicious reports are persisted as `flagged` and excluded from
+  estimates
+- ☐ Anomaly Tier 2 — interface and data-readiness gate exist in
   `backend/app/services/ml_anomaly.py`; no model is trained or enabled because the repository does
   not contain a defensible dataset yet
-- ✅ Anomaly Tier 3 — schema-validated LLM review of statistically suspicious reports, disabled by
+- ✓ Anomaly Tier 3 — schema-validated LLM review of statistically suspicious reports, disabled by
   default (`USE_LLM_REASONING=false`); failures retain the flag instead of clearing it
-- ✅ Price estimator — median of eligible local/city reports, explicit seed fallback,
-  and `unavailable` when evidence is insufficient
-- ⬜ Seed data — loader and empty file exist; no verified week-1 entries collected yet
-- ⬜ Classifier agent — not present, not even a stub module
+- ✓ Reviewer flow — `GET /api/v1/reports` queue, `GET /api/v1/reports/{id}`, and
+  `PATCH /api/v1/reports/{id}/review` are restricted to `ADMIN_USER_IDS`; the `/review` UI has
+  pagination, empty/access-denied/error states, and confirmation before approval or rejection
+- ✓ Verification — 134 backend tests pass, including real-PostgreSQL price/review integration;
+  ruff and mypy pass; the frontend lint and production build pass
+- ☐ Seed data — loader and empty file exist; no verified week-1 entries collected yet
+- ☐ Classifier agent — not present, not even a stub module
+- ☐ Voice/camera capture — no audio recording, transcription, image upload, or classifier UI
+- ☐ Forecasting — no time-series model or trend logic
+- ☐ Coordinator offline gap-analysis loop — still design-only
 
 ---
 
@@ -192,6 +216,10 @@ There's no existing dataset for "fair scrap prices by material and region" — i
 - Decide, based on real comparison data, whether the LLM anomaly tier is worth its cost once
   enough reports exist to judge it fairly
 - The coordinator's offline gap-analysis loop still needs to be designed and built
+- Multi-turn clarification needs draft-merging so a follow-up answer can complete an earlier
+  report instead of failing validation again
+- The persisted `raw_text` should be confirmed as the picker's verbatim message, not the
+  coordinator's paraphrase, before it is treated as an audit record
 
 ---
 
@@ -202,8 +230,8 @@ rather than hidden:
 
 - **Clerk owns identity; threads are server-owned.** The picker id comes from the Clerk `sub`
   claim, and each thread has a server-generated UUID stored against that picker id. Clients
-  cannot create a thread under another user or read/delete one they do not own. Reviewer/role
-  separation remains future work.
+  cannot create a thread under another user or read/delete one they do not own. Reviewer
+  separation is now implemented through `ADMIN_USER_IDS`; there is no finer-grained role model.
 - **Raw source text reaches the model provider.** `POST /api/v1/chat` sends the
   picker's message verbatim to the configured LLM; the message may contain a
   name, phone number or precise address.
@@ -215,5 +243,11 @@ rather than hidden:
   cannot be erased yet.
 - **Thin market evidence and no verified seed entries.** Reports are now aggregated into
   price references, but low report volume and the empty seed file mean many requests
-  correctly return `unavailable`. The schema stores PKR/kg only and no separate sale time.
+  correctly return `unavailable`. The schema stores PKR/kg only; an optional sale time is stored
+  in `observed_at` and falls back to `created_at` when absent.
 - **No retention policy.** Checkpoints and memories accumulate until someone removes them.
+- **No rate limiting or durable idempotency.** A retried chat request can create another thread
+  and/or duplicate a report; duplicate suppression in price aggregation is only a short-window
+  guard, not a submission-level guarantee.
+- **Reviewer projections are anonymized.** The queue omits picker identity, Clerk identifiers,
+  raw text, and thread information, but raw text still exists in the report row and checkpoints.

@@ -31,7 +31,8 @@ Not included yet:
 - Verified seed-price entries (the loader and empty configuration file exist)
 - A trained anomaly model (Tier 2 is disabled until real data satisfies the documented readiness
   threshold), the LLM anomaly tier being enabled by default, or forecasting
-- The material classifier CNN
+- The material classifier CNN, image upload, or camera capture
+- Urdu voice capture or transcription
 - Reporter reputation or contributor programs
 
 ## Layout
@@ -43,17 +44,19 @@ backend/
     api/routes/          Chat, price, health, and reviewer report routes
     auth/                Clerk request verification and reviewer dependency
     core/                Environment-driven settings
+    data/                seed_prices.json (intentionally empty until audited)
     db/                  SQLAlchemy engine and session factory
     models/              SQLAlchemy models for reports and user-owned chat threads
-    schemas/             Chat, price, and report schemas
-    services/            Report, review, price, chat-thread, and history logic
+    schemas/             Chat, price, seed-file, and report/review schemas
+    services/            Report, validation, anomaly, price aggregation, review,
+                          chat-thread, and history logic
     tools/               Price-estimator tool used by the main agent
     workflows/           Intake/anomaly LangGraph pipeline and state
-  alembic/               Migration environment for application tables
-  tests/                 Unit, API, and PostgreSQL integration tests
+  alembic/               Migrations for application tables (through 0003)
+  tests/                 Unit, API, and real-PostgreSQL integration tests
 frontend/
   src/
-    components/          Chat UI and reviewer queue
+    components/          Chat UI, price-check dialog, and reviewer queue
     lib/                 Typed API client and Clerk token helper
 docker-compose.yml       Local PostgreSQL
 ```
@@ -306,6 +309,10 @@ Set-Location ../frontend
 npm run lint
 npm run build
 ```
+
+The price and review integration tests run against the configured PostgreSQL database. Start it
+with `docker compose up -d db` and apply migrations with `uv run alembic upgrade head`; without a
+reachable database those tests skip instead of failing. The suite currently contains 134 tests.
 
 ## Known limitations
 
