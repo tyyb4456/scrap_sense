@@ -25,6 +25,7 @@ from app.schemas.report import (
     ReportStatus,
 )
 from app.services.reports import (
+    ReportApprovalNotEligible,
     ReportReviewConflict,
     get_report_for_review,
     list_reports_for_review,
@@ -124,7 +125,9 @@ async def get_report(
         status.HTTP_401_UNAUTHORIZED: {"description": "Missing or invalid Clerk session"},
         status.HTTP_403_FORBIDDEN: {"description": "Reviewer access required"},
         status.HTTP_404_NOT_FOUND: {"description": "Report not found"},
-        status.HTTP_409_CONFLICT: {"description": "Report is not awaiting review"},
+        status.HTTP_409_CONFLICT: {
+            "description": "Report is not awaiting review or is not pricing-eligible"
+        },
         status.HTTP_503_SERVICE_UNAVAILABLE: {"description": "Report store unavailable"},
     },
 )
@@ -146,6 +149,11 @@ async def review(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"Report is already {exc.current_status} and cannot be reviewed again",
+        ) from None
+    except ReportApprovalNotEligible as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Report cannot be approved: {exc.reason}",
         ) from None
     except SQLAlchemyError:
         await session.rollback()

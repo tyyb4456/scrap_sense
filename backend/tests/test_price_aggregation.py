@@ -248,6 +248,37 @@ def test_missing_location_does_not_mix_markets() -> None:
     assert evaluation.excluded["location_missing"] == 3
 
 
+def test_cityless_historical_observations_are_never_eligible() -> None:
+    for city in (None, "", "   ", "unknown"):
+        evaluation = evaluate(
+            [
+                observation(city=city, price="100"),
+                observation(city=city, price="200"),
+                observation(city=city, price="9000"),
+            ]
+        )
+
+        assert evaluation.estimate.source == "unavailable"
+        assert evaluation.estimate.estimated_price_per_kg is None
+        assert evaluation.excluded["missing_city"] == 3
+
+
+def test_cityless_observations_cannot_lower_a_city_estimate() -> None:
+    evaluation = evaluate(
+        [
+            observation(city=None, price="1"),
+            observation(city="Multan", price="100"),
+            observation(city="Multan", price="200"),
+            observation(city="Multan", price="300"),
+        ]
+    )
+
+    assert evaluation.estimate.source == "local_reports"
+    assert evaluation.estimate.estimated_price_per_kg == 200.0
+    assert evaluation.estimate.observation_count == 3
+    assert evaluation.excluded["missing_city"] == 1
+
+
 def test_insufficient_evidence_returns_unavailable() -> None:
     result = evaluate([observation(), observation()]).estimate
 

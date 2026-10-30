@@ -463,6 +463,61 @@ async def test_rejection_persists_and_keeps_the_report_ineligible(
         await _delete_reports(created)
 
 
+async def test_cityless_flagged_report_cannot_be_approved(
+    postgres_db: None,
+) -> None:
+    unique = uuid4().hex
+    area = f"Cityless Area {unique}"
+    created: list[UUID] = []
+    try:
+        async with SessionLocal() as session:
+            cityless = Report(
+                picker_id=f"cityless-picker-{unique}",
+                raw_text="integration fixture without a city",
+                material="plastic",
+                price_per_kg=Decimal("5000"),
+                quantity_kg=Decimal("2"),
+                currency="PKR",
+                city=None,
+                area=area,
+                observed_at=datetime.now(UTC) - timedelta(days=1),
+                confidence=0.8,
+                is_anomalous=True,
+                anomaly_reason="Price is a statistical outlier.",
+                anomaly_method="mad",
+                status="flagged",
+            )
+            session.add(cityless)
+            await session.commit()
+            await session.refresh(cityless)
+            created.append(cityless.id)
+
+        async with reviewer_client() as client:
+            approval = await client.patch(
+                f"/api/v1/reports/{cityless.id}/review",
+                json={"status": "accepted"},
+            )
+            assert approval.status_code == 409
+            assert "city" in approval.json()["detail"]
+
+        async with SessionLocal() as session:
+            stored = await session.get(Report, cityless.id)
+            assert stored is not None
+            assert stored.status == "flagged"
+            assert stored.is_anomalous is True
+            assert stored.reviewed_at is None
+
+        async with reviewer_client() as client:
+            rejection = await client.patch(
+                f"/api/v1/reports/{cityless.id}/review",
+                json={"status": "rejected"},
+            )
+            assert rejection.status_code == 200
+            assert rejection.json()["status"] == "rejected"
+    finally:
+        await _delete_reports(created)
+
+
 async def test_invalid_transitions_and_missing_reports_are_rejected(
     postgres_db: None,
 ) -> None:

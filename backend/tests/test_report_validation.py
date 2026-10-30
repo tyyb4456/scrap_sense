@@ -44,6 +44,37 @@ def test_valid_report_passes() -> None:
     assert result.issues == []
 
 
+def test_valid_city_without_area_passes() -> None:
+    result = validate_report_draft(valid_draft(area=None), now=NOW)
+
+    assert result.is_valid is True
+    assert result.issues == []
+
+
+def test_missing_city_is_invalid_even_without_area() -> None:
+    result = validate_report_draft(valid_draft(city=None, area=None), now=NOW)
+
+    assert result.is_valid is False
+    assert "missing_city" in result.codes
+    assert "location_inconsistent" not in result.codes
+    assert "the city" in clarification_question(result, valid_draft(city=None, area=None))
+
+
+def test_blank_city_is_treated_as_missing() -> None:
+    result = validate_report_draft(valid_draft(city="   ", area=None), now=NOW)
+
+    assert result.is_valid is False
+    assert "missing_city" in result.codes
+
+
+def test_ambiguous_city_extraction_is_not_accepted() -> None:
+    for city in ("not sure", "unknown", "n/a"):
+        result = validate_report_draft(valid_draft(city=city, area=None), now=NOW)
+
+        assert result.is_valid is False
+        assert "missing_city" in result.codes
+
+
 def test_missing_required_fields_are_reported_without_raw_text() -> None:
     result = validate_report_draft(None, now=NOW)
     assert result.is_valid is False
@@ -103,6 +134,7 @@ def test_area_without_city_is_inconsistent() -> None:
     result = validate_report_draft(valid_draft(city=None, area="Shah Rizwan"), now=NOW)
 
     assert result.is_valid is False
+    assert "missing_city" in result.codes
     assert "location_inconsistent" in result.codes
 
 

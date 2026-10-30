@@ -15,7 +15,11 @@ from app.core.config import Settings, get_settings
 from app.db.session import get_session
 from app.main import app
 from app.models.report import Report
-from app.services.reports import ReportReviewConflict, review_report
+from app.services.reports import (
+    ReportApprovalNotEligible,
+    ReportReviewConflict,
+    review_report,
+)
 
 USER = ClerkUser(user_id="reviewer_1", session_id="sess_1", claims={})
 REPORT_ID = uuid4()
@@ -41,7 +45,12 @@ class FakeSession:
         return None
 
 
-def report_model(*, status: str = "flagged", is_anomalous: bool = True) -> Report:
+def report_model(
+    *,
+    status: str = "flagged",
+    is_anomalous: bool = True,
+    city: str | None = "Multan",
+) -> Report:
     return Report(
         id=REPORT_ID,
         picker_id="picker_1",
@@ -50,7 +59,7 @@ def report_model(*, status: str = "flagged", is_anomalous: bool = True) -> Repor
         price_per_kg=Decimal("150"),
         quantity_kg=Decimal("2"),
         currency="PKR",
-        city="Multan",
+        city=city,
         area=None,
         confidence=0.8,
         is_anomalous=is_anomalous,
@@ -75,6 +84,42 @@ async def test_approval_clears_the_active_flag() -> None:
     assert result.is_anomalous is False
     assert result.reviewed_at is not None
     assert result.reviewed_by == "reviewer_1"
+    assert session.committed is True
+
+
+async def test_approval_cannot_bypass_the_city_requirement() -> None:
+    session = FakeSession(report_model(city=None))
+
+    with pytest.raises(ReportApprovalNotEligible) as raised:
+        await review_report(
+            session,  # type: ignore[arg-type]
+            report_id=REPORT_ID,
+            reviewer_id="reviewer_1",
+            status="accepted",
+        )
+
+    assert "city" in raised.value.reason
+    assert session.committed is False
+    assert session.rolled_back is True
+    assert session.report is not None
+    assert session.report.status == "flagged"
+    assert session.report.is_anomalous is True
+    assert session.report.reviewed_at is None
+
+
+async def test_rejection_is_still_allowed_for_a_cityless_report() -> None:
+    session = FakeSession(report_model(city=None))
+
+    result = await review_report(
+        session,  # type: ignore[arg-type]
+        report_id=REPORT_ID,
+        reviewer_id="reviewer_1",
+        status="rejected",
+    )
+
+    assert result is not None
+    assert result.status == "rejected"
+    assert result.is_anomalous is True
     assert session.committed is True
 
 
@@ -166,6 +211,26 @@ def test_review_endpoint_returns_404_for_an_unknown_report(monkeypatch: Any) -> 
         clear_overrides()
 
     assert response.status_code == 404
+
+
+def test_review_endpoint_rejects_an_ineligible_approval(monkeypatch: Any) -> None:
+    async def fake_review(*_args: Any, **_kwargs: Any) -> Any:
+        raise ReportApprovalNotEligible("a valid city is required for price estimation")
+
+    monkeypatch.setattr(reports_route, "review_report", fake_review)
+    app.dependency_overrides[require_admin] = lambda: USER
+    app.dependency_overrides[get_session] = lambda: object()
+    try:
+        with TestClient(app) as client:
+            response = client.patch(
+                f"/api/v1/reports/{REPORT_ID}/review",
+                json={"status": "accepted"},
+            )
+    finally:
+        clear_overrides()
+
+    assert response.status_code == 409
+    assert "city" in response.json()["detail"]
 
 
 def test_review_endpoint_requires_an_configured_reviewer() -> None:

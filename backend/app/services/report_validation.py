@@ -20,6 +20,35 @@ MAX_PRICE_PER_KG = Decimal("9999999999.99")
 MAX_QUANTITY_KG = Decimal("999999999.999")
 MAX_FUTURE_HOURS = 24
 
+# Extractions sometimes return a non-answer instead of null. These are not
+# cities and must not make a report eligible for the city-based pricing path.
+AMBIGUOUS_CITY_VALUES = frozenset(
+    {
+        "unknown",
+        "unknown city",
+        "city unknown",
+        "not known",
+        "not sure",
+        "unclear",
+        "unspecified",
+        "not specified",
+        "not stated",
+        "not mentioned",
+        "not provided",
+        "not available",
+        "no city",
+        "city not stated",
+        "somewhere",
+        "anywhere",
+        "any city",
+        "n/a",
+        "na",
+        "none",
+        "null",
+        "maybe",
+    }
+)
+
 
 @dataclass(frozen=True)
 class ValidationIssue:
@@ -50,6 +79,14 @@ def _as_utc(value: datetime) -> datetime:
 
 def _finite_decimal(value: Decimal | None) -> bool:
     return value is not None and isinstance(value, Decimal) and value.is_finite()
+
+
+def normalize_city(value: str | None) -> str | None:
+    """Return a usable city name, or ``None`` for blank/non-answer values."""
+    normalized = normalize_text(value)
+    if normalized is None or normalized in AMBIGUOUS_CITY_VALUES:
+        return None
+    return normalized
 
 
 def validate_report_draft(
@@ -151,8 +188,16 @@ def validate_report_draft(
             )
         )
 
-    city = normalize_text(draft.city)
+    city = normalize_city(draft.city)
     area = normalize_text(draft.area)
+    if city is None:
+        issues.append(
+            ValidationIssue(
+                "city",
+                "missing_city",
+                "the city where the sale happened",
+            )
+        )
     if area is not None and city is None:
         issues.append(
             ValidationIssue(
@@ -195,6 +240,7 @@ def validate_report_draft(
 
 GENERIC_CLARIFICATION_CODES = frozenset(
     {
+        "missing_city",
         "missing_material",
         "missing_price",
         "missing_quantity",

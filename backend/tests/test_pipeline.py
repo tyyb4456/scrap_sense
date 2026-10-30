@@ -649,3 +649,62 @@ async def test_pipeline_asks_for_clarification(
     assert result.get("verdict") is None
     assert result.get("final_report") is None
     assert "price per kg" in result["messages"][-1].content
+
+
+async def test_missing_city_asks_for_clarification_without_persistence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cityless = ReportDraft(
+        material="copper",
+        price_per_kg=Decimal("500"),
+        quantity_kg=Decimal("2"),
+        area="Shah Rizwan",
+    )
+    captured: dict[str, Any] = {}
+    monkeypatch.setattr(pipeline_module, "_extraction_model", lambda: FakeModel(cityless))
+    patch_save_report(monkeypatch, captured)
+    graph = pipeline_module.build_pipeline()
+
+    result = await graph.ainvoke(
+        {
+            "messages": [HumanMessage(content="sold 2kg copper at 500 per kg in Shah Rizwan")],
+            "original_message": "sold 2kg copper at 500 per kg in Shah Rizwan",
+        },
+        {"configurable": {"thread_id": "user_123"}},
+    )
+
+    assert captured == {}
+    assert result.get("final_report") is None
+    assert result.get("deterministic_result") is None
+    assert "missing_city" in result["validation_result"].codes
+    assert "city" in result["messages"][-1].content.lower()
+
+
+async def test_ambiguous_city_extraction_asks_for_clarification_without_persistence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ambiguous = ReportDraft(
+        material="copper",
+        price_per_kg=Decimal("500"),
+        quantity_kg=Decimal("2"),
+        city="not sure",
+        needs_clarification=True,
+        clarification_question="Which city was the sale in?",
+    )
+    captured: dict[str, Any] = {}
+    monkeypatch.setattr(pipeline_module, "_extraction_model", lambda: FakeModel(ambiguous))
+    patch_save_report(monkeypatch, captured)
+    graph = pipeline_module.build_pipeline()
+
+    result = await graph.ainvoke(
+        {
+            "messages": [HumanMessage(content="sold 2kg copper at 500 per kg somewhere")],
+            "original_message": "sold 2kg copper at 500 per kg somewhere",
+        },
+        {"configurable": {"thread_id": "user_123"}},
+    )
+
+    assert captured == {}
+    assert result.get("final_report") is None
+    assert "missing_city" in result["validation_result"].codes
+    assert result["messages"][-1].content == "Which city was the sale in?"

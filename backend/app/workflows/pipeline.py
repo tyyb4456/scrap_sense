@@ -66,9 +66,12 @@ Extract the scrap sale details from the picker's message below.
 
 Return only details supported by the message. Use PKR unless another currency is
 stated. Use kg as the unit unless the message clearly uses something else. If the
-message states a sale date, include it; otherwise leave it null. Leave missing
-fields null and ask one short clarification question when a required detail is
-missing. Do not estimate a price that was not stated.
+message states a sale date, include it; otherwise leave it null. A city is
+required for price estimation: leave it null when the message does not state a
+city, and ask for the city rather than guessing one. Leave missing fields null and
+ask one short clarification question when a required detail is missing. Do not
+estimate a price that was not stated. Do not infer a precise address from a vague
+location.
 
 Message:
 {raw_text}

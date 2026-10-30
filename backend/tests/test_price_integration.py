@@ -43,7 +43,7 @@ async def _require_postgres() -> None:
 
 def report(
     *,
-    city: str,
+    city: str | None,
     area: str,
     price: str,
     picker_id: str,
@@ -298,6 +298,76 @@ async def test_postgres_repository_falls_back_to_city_evidence() -> None:
         finally:
             await session.rollback()
             await engine.dispose()
+
+async def test_postgres_cityless_historical_reports_are_excluded_from_estimates() -> None:
+    await _require_postgres()
+    unique = uuid.uuid4().hex
+    city = f"Historical City {unique}"
+    area = f"Historical Area {unique}"
+    now = datetime.now(UTC)
+
+    async with SessionLocal() as session:
+        try:
+            null_city = report(
+                city=None,
+                area=area,
+                price="9999",
+                picker_id=f"history-picker-{unique}-1",
+                created_at=now - timedelta(days=1),
+            )
+            blank_city = report(
+                city="",
+                area=area,
+                price="8888",
+                picker_id=f"history-picker-{unique}-2",
+                created_at=now - timedelta(days=1),
+            )
+            session.add_all(
+                [
+                    null_city,
+                    blank_city,
+                    report(
+                        city=city,
+                        area=area,
+                        price="100",
+                        picker_id=f"history-picker-{unique}-3",
+                        created_at=now - timedelta(days=1),
+                    ),
+                    report(
+                        city=city,
+                        area=area,
+                        price="200",
+                        picker_id=f"history-picker-{unique}-4",
+                        created_at=now - timedelta(days=1),
+                    ),
+                ]
+            )
+            await session.flush()
+
+            service = PriceService(
+                session=session,
+                settings=Settings(price_min_observations=2),
+            )
+            result = await service.estimate(
+                material="plastic",
+                location=city,
+                area=area,
+            )
+
+            assert result.source == "local_reports"
+            assert result.estimated_price_per_kg == 150.0
+            assert result.observation_count == 2
+            assert result.observed_max_price_per_kg == 200.0
+
+            # Historical rows are not rewritten by the price read path.
+            assert null_city.city is None
+            assert blank_city.city == ""
+            assert null_city.status == "accepted"
+            assert blank_city.status == "accepted"
+        finally:
+            await session.rollback()
+            await engine.dispose()
+
 
 async def test_postgres_save_report_persists_a_suspicious_report_as_flagged() -> None:
     await _require_postgres()

@@ -26,6 +26,7 @@ from app.services.materials import (
     normalize_material,
     normalize_text,
 )
+from app.services.report_validation import normalize_city
 
 SUPPORTED_UNIT = "kg"
 DEFAULT_CURRENCY = "PKR"
@@ -132,6 +133,8 @@ def eligibility_reason(
         return f"status:{observation.status}"
     if observation.is_anomalous:
         return "flagged_anomalous"
+    if normalize_city(observation.city) is None:
+        return "missing_city"
     if observation.unit != SUPPORTED_UNIT:
         return "unit_mismatch"
     if observation.normalized_material is None:

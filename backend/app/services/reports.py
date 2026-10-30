@@ -12,7 +12,7 @@ from app.db.session import SessionLocal
 from app.models.report import Report
 from app.schemas.report import AnomalyVerdict, FinalReport, ReportDraft
 from app.services.price_aggregation import as_utc
-from app.services.report_validation import validate_report_draft
+from app.services.report_validation import normalize_city, validate_report_draft
 
 REPORT_STATUS_ACCEPTED = "accepted"
 REPORT_STATUS_FLAGGED = "flagged"
@@ -28,6 +28,26 @@ class ReportReviewConflict(Exception):
     def __init__(self, current_status: str) -> None:
         self.current_status = current_status
         super().__init__(f"report status {current_status!r} cannot be reviewed")
+
+
+class ReportApprovalNotEligible(Exception):
+    """The report cannot enter the pricing dataset even with human approval."""
+
+    def __init__(self, reason: str) -> None:
+        self.reason = reason
+        super().__init__(reason)
+
+
+def pricing_ineligibility_reason(report: Report) -> str | None:
+    """Return a mandatory pricing-eligibility problem, or ``None``.
+
+    A city is the minimum geography required by both anomaly comparison and price
+    aggregation. Historical rows are never rewritten; they simply remain
+    ineligible until a valid city exists in the stored data.
+    """
+    if normalize_city(report.city) is None:
+        return "a valid city is required for price estimation"
+    return None
 
 
 async def save_report(
@@ -102,6 +122,8 @@ async def fetch_reports_for_pricing(
             Report.price_per_kg > 0,
             func.coalesce(Report.observed_at, Report.created_at) >= since,
             func.lower(func.trim(Report.currency)) == currency.lower(),
+            Report.city.is_not(None),
+            func.trim(Report.city) != "",
             func.lower(func.trim(Report.city)) == city,
             func.lower(func.trim(Report.material)).in_(sorted(material_aliases)),
         )
@@ -138,6 +160,8 @@ async def fetch_comparable_reports(
             Report.price_per_kg > 0,
             func.coalesce(Report.observed_at, Report.created_at) >= since,
             func.lower(func.trim(Report.currency)) == currency.lower(),
+            Report.city.is_not(None),
+            func.trim(Report.city) != "",
             func.lower(func.trim(Report.city)) == city,
             func.lower(func.trim(Report.material)).in_(sorted(material_aliases)),
         )
@@ -197,8 +221,10 @@ async def review_report(
 
     Only a ``flagged`` report can receive a human decision. Approval clears the
     active anomaly flag so the report can influence price aggregation again if
-    every other eligibility rule still passes. Rejection keeps the row for audit
-    but excludes it by status. Original anomaly evidence is not erased.
+    every other eligibility rule still passes. Approval is refused when the stored
+    report lacks a valid city because such a report can never enter the pricing
+    dataset. Rejection keeps the row for audit but excludes it by status. Original
+    anomaly evidence is not erased.
 
     The row is locked for the duration of the decision so two reviewers cannot
     apply conflicting transitions to the same report.
@@ -214,6 +240,12 @@ async def review_report(
     if current_status != REPORT_STATUS_FLAGGED:
         await session.rollback()
         raise ReportReviewConflict(current_status)
+
+    if status == REPORT_STATUS_ACCEPTED:
+        reason = pricing_ineligibility_reason(report)
+        if reason is not None:
+            await session.rollback()
+            raise ReportApprovalNotEligible(reason)
 
     report.status = status
     report.reviewed_at = datetime.now(UTC)
