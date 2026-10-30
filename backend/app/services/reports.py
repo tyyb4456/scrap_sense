@@ -10,7 +10,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import SessionLocal
 from app.models.report import Report
-from app.schemas.report import AnomalyVerdict, FinalReport, ReportDraft
+from app.schemas.report import (
+    AnomalyVerdict,
+    FinalReport,
+    ReportDraft,
+    tier1_check_completed,
+)
 from app.services.price_aggregation import as_utc
 from app.services.report_validation import normalize_city, validate_report_draft
 
@@ -38,6 +43,14 @@ class ReportApprovalNotEligible(Exception):
         super().__init__(reason)
 
 
+class ReportProcessingUnavailable(Exception):
+    """The mandatory Tier 1 anomaly check did not produce a conclusion."""
+
+    def __init__(self, outcome: str) -> None:
+        self.outcome = outcome
+        super().__init__(f"Tier 1 anomaly check did not complete (outcome={outcome!r})")
+
+
 def pricing_ineligibility_reason(report: Report) -> str | None:
     """Return a mandatory pricing-eligibility problem, or ``None``.
 
@@ -62,6 +75,11 @@ async def save_report(
     ``accepted`` means the report passed the available automatic checks and may
     influence price aggregation. ``flagged`` means it is suspicious and must
     stay out of aggregation until an authorized reviewer approves it.
+
+    A report whose mandatory Tier 1 check did not complete (``unavailable``,
+    ``insufficient_evidence``, ``error``, ``disabled``, or a missing verdict)
+    is never persisted. The caller must fail the processing attempt safely
+    instead of storing a normal-looking or suspicious-looking row.
     """
     validation = validate_report_draft(draft)
     if not validation.is_valid:
@@ -71,7 +89,10 @@ async def save_report(
         )
     if draft.material is None or draft.price_per_kg is None or draft.quantity_kg is None:
         raise ValueError("Cannot persist a report missing material, price, or quantity")
+    if not tier1_check_completed(verdict):
+        raise ReportProcessingUnavailable(verdict.outcome)
 
+    flagged = verdict.is_anomalous or verdict.outcome == "suspicious"
     report = Report(
         picker_id=picker_id,
         raw_text=raw_text,
@@ -83,10 +104,10 @@ async def save_report(
         area=draft.area,
         observed_at=as_utc(draft.observed_at) if draft.observed_at is not None else None,
         confidence=draft.confidence,
-        is_anomalous=verdict.is_anomalous,
+        is_anomalous=flagged,
         anomaly_reason=verdict.reason,
         anomaly_method=verdict.method,
-        status=REPORT_STATUS_FLAGGED if verdict.is_anomalous else REPORT_STATUS_ACCEPTED,
+        status=REPORT_STATUS_FLAGGED if flagged else REPORT_STATUS_ACCEPTED,
     )
 
     async with SessionLocal() as session:
@@ -242,6 +263,11 @@ async def review_report(
         raise ReportReviewConflict(current_status)
 
     if status == REPORT_STATUS_ACCEPTED:
+        if not report.is_anomalous:
+            await session.rollback()
+            raise ReportApprovalNotEligible(
+                "the statistical anomaly check did not complete for this report"
+            )
         reason = pricing_ineligibility_reason(report)
         if reason is not None:
             await session.rollback()

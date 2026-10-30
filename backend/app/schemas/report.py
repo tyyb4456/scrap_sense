@@ -165,6 +165,19 @@ class AnomalyVerdict(BaseModel):
     mad_price_per_kg: Decimal | None = None
 
 
+TIER1_COMPLETED_OUTCOMES: frozenset[str] = frozenset({"pass", "suspicious"})
+
+
+def tier1_check_completed(verdict: AnomalyVerdict | None) -> bool:
+    """Return whether Tier 1 produced a usable conclusion.
+
+    Only ``pass`` and ``suspicious`` mean the deterministic comparison actually
+    ran. ``unavailable``, ``insufficient_evidence``, ``error``, ``disabled``, and
+    a missing verdict are not conclusions and must never be treated as normal.
+    """
+    return verdict is not None and verdict.outcome in TIER1_COMPLETED_OUTCOMES
+
+
 class FinalReport(BaseModel):
     """A validated report guaranteed to have the required sale fields."""
 

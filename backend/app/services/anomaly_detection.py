@@ -263,7 +263,9 @@ async def evaluate_report_statistical(
     """Load comparable reports from PostgreSQL and run the Tier 1 check.
 
     Database failures are returned as an explicit ``unavailable`` outcome so the
-    graph can continue safely instead of crashing or pretending a check passed.
+    graph can stop safely instead of crashing or pretending a check passed. The
+    pipeline treats ``unavailable`` and ``insufficient_evidence`` as incomplete
+    and does not persist the report.
     """
     from app.db.session import SessionLocal  # local import keeps pure tests DB-free
 

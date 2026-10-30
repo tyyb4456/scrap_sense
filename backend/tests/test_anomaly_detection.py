@@ -3,9 +3,17 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from typing import Any
 
+import pytest
+
+from app.core.config import Settings
+from app.db import session as db_session
+from app.schemas.report import ReportDraft, tier1_check_completed
+from app.services import anomaly_detection as anomaly_module
 from app.services.anomaly_detection import (
     AnomalyPolicy,
+    evaluate_report_statistical,
     evaluate_statistical_anomaly,
 )
 from app.services.price_aggregation import PriceObservation
@@ -218,3 +226,70 @@ def test_missing_city_or_invalid_candidate_is_insufficient() -> None:
     assert evaluate(sample, city=None).outcome == "insufficient_evidence"
     assert evaluate(sample, unit="item").outcome == "insufficient_evidence"
     assert evaluate(sample, price="0").outcome == "insufficient_evidence"
+
+
+class _FakeSessionContext:
+    def __init__(self, *, fail: bool = False) -> None:
+        self.fail = fail
+
+    async def __aenter__(self) -> Any:
+        if self.fail:
+            raise RuntimeError("database is unavailable")
+        return object()
+
+    async def __aexit__(self, *_args: Any) -> bool:
+        return False
+
+
+def _candidate_draft() -> ReportDraft:
+    return ReportDraft(
+        material="plastic",
+        price_per_kg=Decimal("100"),
+        quantity_kg=Decimal("2"),
+        city="Multan",
+        area="Shah Rizwan",
+    )
+
+
+async def test_database_comparison_failure_returns_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(db_session, "SessionLocal", lambda: _FakeSessionContext(fail=True))
+
+    result = await evaluate_report_statistical(_candidate_draft(), settings=Settings())
+
+    assert result.outcome == "unavailable"
+    assert result.is_anomalous is False
+    assert tier1_check_completed(result) is False
+
+
+async def test_unexpected_comparison_failure_returns_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def explode(*_args: Any, **_kwargs: Any) -> list[Any]:
+        raise RuntimeError("unexpected comparison failure")
+
+    monkeypatch.setattr(db_session, "SessionLocal", lambda: _FakeSessionContext())
+    monkeypatch.setattr(anomaly_module, "fetch_comparable_reports", explode)
+
+    result = await evaluate_report_statistical(_candidate_draft(), settings=Settings())
+
+    assert result.outcome == "unavailable"
+    assert result.is_anomalous is False
+    assert tier1_check_completed(result) is False
+
+
+async def test_insufficient_comparison_evidence_is_not_a_normal_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def no_history(*_args: Any, **_kwargs: Any) -> list[Any]:
+        return []
+
+    monkeypatch.setattr(db_session, "SessionLocal", lambda: _FakeSessionContext())
+    monkeypatch.setattr(anomaly_module, "fetch_comparable_reports", no_history)
+
+    result = await evaluate_report_statistical(_candidate_draft(), settings=Settings())
+
+    assert result.outcome == "insufficient_evidence"
+    assert result.is_anomalous is False
+    assert tier1_check_completed(result) is False

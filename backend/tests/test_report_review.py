@@ -107,6 +107,26 @@ async def test_approval_cannot_bypass_the_city_requirement() -> None:
     assert session.report.reviewed_at is None
 
 
+async def test_approval_cannot_bypass_an_incomplete_tier1_check() -> None:
+    session = FakeSession(report_model(status="flagged", is_anomalous=False))
+
+    with pytest.raises(ReportApprovalNotEligible) as raised:
+        await review_report(
+            session,  # type: ignore[arg-type]
+            report_id=REPORT_ID,
+            reviewer_id="reviewer_1",
+            status="accepted",
+        )
+
+    assert "anomaly check" in raised.value.reason
+    assert session.committed is False
+    assert session.rolled_back is True
+    assert session.report is not None
+    assert session.report.status == "flagged"
+    assert session.report.is_anomalous is False
+    assert session.report.reviewed_at is None
+
+
 async def test_rejection_is_still_allowed_for_a_cityless_report() -> None:
     session = FakeSession(report_model(city=None))
 

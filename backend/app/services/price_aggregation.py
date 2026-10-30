@@ -20,6 +20,7 @@ from typing import cast
 from uuid import UUID
 
 from app.schemas.price import EvidenceQuality, GeographicScope, PriceEstimate
+from app.schemas.report import TIER1_COMPLETED_OUTCOMES
 from app.services.materials import (
     material_aliases,
     material_label,
@@ -55,6 +56,7 @@ class PriceObservation:
     status: str = "accepted"
     is_anomalous: bool = False
     unit: str = SUPPORTED_UNIT
+    anomaly_outcome: str = "pass"
 
     @property
     def normalized_material(self) -> str | None:
@@ -131,6 +133,8 @@ def eligibility_reason(
     """
     if observation.status != "accepted":
         return f"status:{observation.status}"
+    if observation.anomaly_outcome not in TIER1_COMPLETED_OUTCOMES:
+        return f"anomaly_outcome:{observation.anomaly_outcome}"
     if observation.is_anomalous:
         return "flagged_anomalous"
     if normalize_city(observation.city) is None:

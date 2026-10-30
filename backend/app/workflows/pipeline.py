@@ -8,22 +8,30 @@ Execution path:
                  |                    v
                  |                   END (clarification, no persistence)
                  |
-                 +--> deterministic_check -> ml_check
-                                                    |
-                                     +--------------+--------------+
-                                     |                             |
-                              suspicious & LLM on            pass/insufficient
-                                     v                             |
-                                 llm_check                         |
-                                     |                             |
-                                     +--------------+--------------+
-                                                    v
-                                                  accept -> finalize_report -> END
+                 +--> deterministic_check
+                            |
+                 +----------+-------------------+
+                 |                              |
+        unavailable / insufficient      pass / suspicious
+                 |                              v
+                 v                           ml_check
+       processing_unavailable                   |
+                 |                   +----------+----------+
+                 v                   |                     |
+                END           suspicious & LLM on       accept -> finalize_report
+          (no persistence)           v                     |          |
+                                 llm_check -----------------+          v
+                                                                     END
 
-Tier 1 (median/MAD) is deterministic. Tier 2 (ML) is disabled until a trained,
-evaluated artifact and enough real data exist. Tier 3 (LLM) is reached only for
-statistically suspicious reports and only when `USE_LLM_REASONING` is enabled;
-it can add context but never clears the flag or overrides validation.
+Tier 1 (median/MAD) is deterministic and mandatory. A report is never persisted
+unless Tier 1 produced a usable conclusion (`pass` or `suspicious`). When the
+comparison is unavailable, errors, or lacks sufficient evidence, the pipeline
+stops with a controlled retry message instead of accepting the report.
+
+Tier 2 (ML) is disabled until a trained, evaluated artifact and enough real data
+exist. Tier 3 (LLM) is reached only for statistically suspicious reports and
+only when `USE_LLM_REASONING` is enabled; it can add context but never clears
+the flag or overrides validation.
 """
 
 from __future__ import annotations
@@ -38,7 +46,13 @@ from langgraph.graph import END, START, StateGraph
 
 from app.core.config import get_settings
 from app.llm import build_xkiro_llm
-from app.schemas.report import AnomalyOutcome, AnomalyVerdict, LLMJudgment, ReportDraft
+from app.schemas.report import (
+    AnomalyOutcome,
+    AnomalyVerdict,
+    LLMJudgment,
+    ReportDraft,
+    tier1_check_completed,
+)
 from app.services.anomaly_detection import evaluate_report_statistical
 from app.services.ml_anomaly import evaluate_ml_check
 from app.services.report_validation import clarification_question, validate_report_draft
@@ -48,6 +62,11 @@ from app.workflows.state import PipelineState
 logger = logging.getLogger(__name__)
 
 settings = get_settings()
+
+PROCESSING_UNAVAILABLE_MESSAGE = (
+    "I couldn't run the price safety check needed before saving your report, so "
+    "the report was not saved. Please try again shortly."
+)
 
 _model = None
 _structured_extraction_model = None
@@ -268,7 +287,7 @@ async def deterministic_check_node(state: PipelineState) -> dict[str, Any]:
         verdict = await evaluate_report_statistical(draft, settings=settings)
     except Exception as exc:
         logger.warning(
-            "Deterministic anomaly comparison failed (%s); continuing",
+            "Deterministic anomaly comparison failed (%s); failing safely",
             type(exc).__name__,
         )
         verdict = AnomalyVerdict(
@@ -335,6 +354,11 @@ async def llm_check_node(state: PipelineState) -> dict[str, Any]:
     The LLM can explain or strengthen a flag, but a statistical flag is never
     cleared automatically and structural validation is never revisited.
     """
+    deterministic = state.get("deterministic_result")
+    if not tier1_check_completed(deterministic):
+        logger.warning("Skipping LLM review because Tier 1 did not complete")
+        return {"llm_result": _neutral_verdict("llm", outcome="unavailable")}
+
     draft = state.get("report_draft")
     suspicious = _suspicious_verdicts(state)
     if draft is None or not suspicious:
@@ -400,10 +424,24 @@ def _picker_id_from_config(config: RunnableConfig) -> str:
     return thread_id if isinstance(thread_id, str) and thread_id else "unknown"
 
 
+def _tier1_completed(state: PipelineState) -> bool:
+    return tier1_check_completed(state.get("deterministic_result"))
+
+
 def _resolve_verdict(state: PipelineState) -> AnomalyVerdict:
-    """Merge tier results. Any suspicious result keeps the report flagged."""
+    """Merge tier results without ever upgrading an incomplete Tier 1 result.
+
+    Tier 1 is the mandatory check. If it is missing, unavailable, errored, or
+    lacked enough evidence, later tiers cannot turn that into a normal report.
+    """
+    deterministic = state.get("deterministic_result")
+    if not tier1_check_completed(deterministic):
+        if deterministic is None:
+            return _neutral_verdict("mad", outcome="unavailable")
+        return deterministic
+
     results = [
-        state.get("deterministic_result"),
+        deterministic,
         state.get("ml_result"),
         state.get("llm_result"),
         state.get("verdict"),
@@ -429,36 +467,31 @@ def _resolve_verdict(state: PipelineState) -> AnomalyVerdict:
             mad_price_per_kg=primary.mad_price_per_kg,
         )
 
-    deterministic = state.get("deterministic_result")
-    if deterministic is not None:
-        return deterministic
-    if state.get("verdict") is not None:
-        return state["verdict"]  # type: ignore[return-value]
-    ml = state.get("ml_result")
-    if ml is not None:
-        return ml
-    return _neutral_verdict("mad", outcome="unavailable")
+    if deterministic is None:  # pragma: no cover - guarded above
+        return _neutral_verdict("mad", outcome="unavailable")
+    return deterministic
 
 
 def accept_node(state: PipelineState) -> dict[str, Any]:
     verdict = _resolve_verdict(state)
+    if not tier1_check_completed(verdict):
+        logger.warning(
+            "Refusing to accept a report whose Tier 1 check did not complete "
+            "(outcome=%s)",
+            verdict.outcome,
+        )
+        return {
+            "verdict": verdict,
+            "messages": [AIMessage(content=PROCESSING_UNAVAILABLE_MESSAGE)],
+        }
+
     draft = state.get("report_draft")
     material = draft.material if draft is not None else "this material"
 
-    if verdict.is_anomalous:
+    if verdict.is_anomalous or verdict.outcome == "suspicious":
         summary = (
             f"Report flagged for review: {verdict.reason} "
             "It may be legitimate, but it will not affect prices until reviewed."
-        )
-    elif verdict.outcome == "insufficient_evidence":
-        summary = (
-            f"Report accepted for {material}. There was not enough comparable "
-            "history to run a statistical check."
-        )
-    elif verdict.outcome == "unavailable":
-        summary = (
-            f"Report accepted for {material}. Anomaly checks were unavailable, so "
-            "no statistical conclusion was drawn."
         )
     else:
         summary = f"Report accepted for {material}."
@@ -467,6 +500,19 @@ def accept_node(state: PipelineState) -> dict[str, Any]:
     return {
         "verdict": verdict,
         "messages": [AIMessage(content=summary)],
+    }
+
+
+def processing_unavailable_node(state: PipelineState) -> dict[str, Any]:
+    """Stop without persisting when the mandatory Tier 1 check did not complete."""
+    verdict = _resolve_verdict(state)
+    logger.warning(
+        "Report processing stopped because Tier 1 did not complete (outcome=%s)",
+        verdict.outcome,
+    )
+    return {
+        "verdict": verdict,
+        "messages": [AIMessage(content=PROCESSING_UNAVAILABLE_MESSAGE)],
     }
 
 
@@ -483,6 +529,17 @@ async def finalize_report_node(
         }
 
     verdict = _resolve_verdict(state)
+    if not tier1_check_completed(verdict):
+        logger.warning(
+            "Refusing to persist a report whose Tier 1 check did not complete "
+            "(outcome=%s)",
+            verdict.outcome,
+        )
+        return {
+            "verdict": verdict,
+            "messages": [AIMessage(content=PROCESSING_UNAVAILABLE_MESSAGE)],
+        }
+
     raw_text = _original_message(state, config)
     if raw_text is None:
         logger.error(
@@ -538,10 +595,16 @@ async def finalize_report_node(
 
 
 def route_after_deterministic(state: PipelineState) -> str:
+    if not _tier1_completed(state):
+        logger.warning("Routing after deterministic check -> 'processing_unavailable'")
+        return "processing_unavailable"
     return "ml_check"
 
 
 def route_after_ml(state: PipelineState) -> str:
+    if not _tier1_completed(state):
+        logger.warning("Routing after ML check -> 'processing_unavailable'")
+        return "processing_unavailable"
     flagged = bool(_suspicious_verdicts(state))
     target = "llm_check" if (settings.use_llm_reasoning and flagged) else "accept"
     logger.info("Routing after ML check (flagged=%s) -> '%s'", flagged, target)
@@ -558,6 +621,7 @@ def build_pipeline():
     graph.add_node("llm_check", llm_check_node)
     graph.add_node("accept", accept_node)
     graph.add_node("finalize_report", finalize_report_node)
+    graph.add_node("processing_unavailable", processing_unavailable_node)
 
     graph.add_edge(START, "report_draft")
     graph.add_edge("report_draft", "validate_and_build")
@@ -570,16 +634,24 @@ def build_pipeline():
     graph.add_conditional_edges(
         "deterministic_check",
         route_after_deterministic,
-        {"ml_check": "ml_check"},
+        {
+            "ml_check": "ml_check",
+            "processing_unavailable": "processing_unavailable",
+        },
     )
     graph.add_conditional_edges(
         "ml_check",
         route_after_ml,
-        {"llm_check": "llm_check", "accept": "accept"},
+        {
+            "llm_check": "llm_check",
+            "accept": "accept",
+            "processing_unavailable": "processing_unavailable",
+        },
     )
     graph.add_edge("llm_check", "accept")
     graph.add_edge("accept", "finalize_report")
     graph.add_edge("finalize_report", END)
+    graph.add_edge("processing_unavailable", END)
 
     return graph.compile(name="scrap_report_pipeline")
 

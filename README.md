@@ -119,7 +119,7 @@ xKiro, an OpenAI-compatible gateway. Configure it with:
 Anomaly detection is configured with conservative defaults:
 
 - `ANOMALY_MIN_SAMPLE_SIZE` (default `5`) — fewer comparable reports returns
-  `insufficient_evidence` and the report continues without a statistical conclusion.
+  `insufficient_evidence`; the report is not saved and the picker is asked to retry.
 - `ANOMALY_MAX_OBSERVATION_AGE_DAYS` (default `90`) — only recent comparable reports are used.
 - `ANOMALY_MAX_COMPARISONS` (default `500`) — bound on rows read for one check.
 - `ANOMALY_MAD_Z_THRESHOLD` (default `3.5`) — modified z-score threshold.
@@ -265,9 +265,9 @@ the frontend only handles `401`/`403` responses.
 
 Statuses are the existing report lifecycle, not a second parallel state system:
 
-- `accepted` — passed deterministic validation and the available anomaly checks. It is eligible for
-  price aggregation. `reviewed_at` is null when the decision was automatic and set when a reviewer
-  approved it.
+- `accepted` — passed deterministic validation and the mandatory Tier 1 anomaly check. It is
+  eligible for price aggregation. `reviewed_at` is null when the decision was automatic and set when
+  a reviewer approved it.
 - `flagged` — statistically suspicious or awaiting review. It is persisted, never deleted, and
   excluded from price aggregation until a reviewer approves it.
 - `rejected` — a reviewer rejected it. It is retained for audit but never eligible.
@@ -282,7 +282,11 @@ Tier 1 compares only accepted, non-anomalous historical reports with the same no
 currency, unit (`kg`), and city. When an area has enough evidence it is preferred, otherwise the
 city is used. The check uses the median and median absolute deviation; a statistical outlier is
 marked `suspicious` for review, never labelled fraud or automatically rejected. Insufficient
-history produces an explicit `insufficient_evidence` result rather than an invented anomaly.
+history produces an explicit `insufficient_evidence` result rather than an invented anomaly, and
+the report is not persisted. A database failure or unexpected comparison error returns
+`unavailable`; that is never converted into a normal result. In both cases the pipeline stops with
+a controlled retry message, so an unavailable check can never create an accepted or suspicious row
+or contribute to price aggregation.
 
 Tier 2 (ML) is disabled because the repository contains no defensible training set. The interface
 and readiness rule live in `backend/app/services/ml_anomaly.py`. The documented gate is 200 accepted

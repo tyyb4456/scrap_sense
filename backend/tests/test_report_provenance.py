@@ -224,6 +224,7 @@ async def test_finalize_preserves_original_message_and_clerk_picker_id(
             "messages": [HumanMessage(content=COORDINATOR_PARAPHRASE)],
             "original_message": ORIGINAL_MESSAGE,
             "report_draft": valid_draft(),
+            "deterministic_result": neutral_verdict(),
             "verdict": neutral_verdict(),
         },
         {"configurable": {"thread_id": "thread-1", "picker_id": PICKER_ID}},
@@ -263,6 +264,7 @@ async def test_finalize_refuses_to_persist_without_original_message(
         {
             "messages": [HumanMessage(content=COORDINATOR_PARAPHRASE)],
             "report_draft": valid_draft(),
+            "deterministic_result": neutral_verdict(),
             "verdict": neutral_verdict(),
         },
         {"configurable": {"thread_id": "thread-1", "picker_id": PICKER_ID}},

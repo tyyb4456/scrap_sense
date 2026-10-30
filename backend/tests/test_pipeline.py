@@ -46,6 +46,16 @@ class SlowAsyncModel:
         return LLMJudgment(assessment="likely_bad_data", reason="too late", confidence=0.9)
 
 
+class RecordingAsyncModel:
+    def __init__(self, value: Any) -> None:
+        self.value = value
+        self.calls = 0
+
+    async def ainvoke(self, _messages: Any) -> Any:
+        self.calls += 1
+        return self.value
+
+
 def valid_draft() -> ReportDraft:
     return ReportDraft(
         material="copper",
@@ -381,7 +391,12 @@ def test_accept_reports_a_flagged_verdict() -> None:
     )
 
     result = pipeline_module.accept_node(
-        {"messages": [], "report_draft": valid_draft(), "verdict": flagged}
+        {
+            "messages": [],
+            "report_draft": valid_draft(),
+            "deterministic_result": flagged,
+            "verdict": flagged,
+        }
     )
 
     assert result["verdict"] == flagged
@@ -543,9 +558,10 @@ async def test_llm_tier_is_skipped_when_disabled(
     assert result["structured_response"].status == "flagged"
 
 
-async def test_insufficient_evidence_accepts_without_pretending_to_verify(
+async def test_insufficient_evidence_fails_safely_without_persistence(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    captured: dict[str, Any] = {}
     monkeypatch.setattr(pipeline_module, "_extraction_model", lambda: FakeModel(valid_draft()))
     patch_statistical(
         monkeypatch,
@@ -555,7 +571,7 @@ async def test_insufficient_evidence_accepts_without_pretending_to_verify(
             confidence=0.0,
         ),
     )
-    patch_save_report(monkeypatch)
+    patch_save_report(monkeypatch, captured)
     graph = pipeline_module.build_pipeline()
 
     result = await graph.ainvoke(
@@ -566,12 +582,187 @@ async def test_insufficient_evidence_accepts_without_pretending_to_verify(
         {"configurable": {"thread_id": "user_123"}},
     )
 
+    assert captured == {}
+    assert result.get("final_report") is None
+    assert result.get("structured_response") is None
     assert result["verdict"].outcome == "insufficient_evidence"
-    assert result["structured_response"].status == "accepted"
-    assert any(
-        "not enough comparable" in message.content.lower()
-        for message in result["messages"]
+    assert result.get("ml_result") is None
+    assert "not saved" in result["messages"][-1].content.lower()
+    assert "accepted" not in result["messages"][-1].content.lower()
+
+
+async def test_unavailable_tier1_stops_before_ml_and_persistence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+    monkeypatch.setattr(pipeline_module, "_extraction_model", lambda: FakeModel(valid_draft()))
+    patch_statistical(
+        monkeypatch,
+        verdict(
+            outcome="unavailable",
+            reason="Historical comparison was unavailable.",
+            confidence=0.0,
+        ),
     )
+    patch_save_report(monkeypatch, captured)
+    graph = pipeline_module.build_pipeline()
+
+    result = await graph.ainvoke(
+        {
+            "messages": [HumanMessage(content="sold 2kg copper at 500 per kg")],
+            "original_message": "sold 2kg copper at 500 per kg",
+        },
+        {"configurable": {"thread_id": "user_123"}},
+    )
+
+    assert captured == {}
+    assert result.get("final_report") is None
+    assert result.get("structured_response") is None
+    assert result.get("ml_result") is None
+    assert result["verdict"].outcome == "unavailable"
+    assert result["verdict"].is_anomalous is False
+    assert "not saved" in result["messages"][-1].content.lower()
+    assert "accepted" not in result["messages"][-1].content.lower()
+
+
+async def test_unexpected_deterministic_exception_fails_safely(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    async def explode(_draft: ReportDraft, *, settings: Any) -> AnomalyVerdict:
+        raise RuntimeError("database connection reset")
+
+    monkeypatch.setattr(pipeline_module, "_extraction_model", lambda: FakeModel(valid_draft()))
+    monkeypatch.setattr(pipeline_module, "evaluate_report_statistical", explode)
+    patch_save_report(monkeypatch, captured)
+    graph = pipeline_module.build_pipeline()
+
+    result = await graph.ainvoke(
+        {
+            "messages": [HumanMessage(content="sold 2kg copper at 500 per kg")],
+            "original_message": "sold 2kg copper at 500 per kg",
+        },
+        {"configurable": {"thread_id": "user_123"}},
+    )
+
+    assert result["deterministic_result"].outcome == "unavailable"
+    assert captured == {}
+    assert result.get("final_report") is None
+    assert result.get("structured_response") is None
+    assert "not saved" in result["messages"][-1].content.lower()
+
+
+async def test_tier3_cannot_override_unavailable_tier1(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    judge = RecordingAsyncModel(
+        LLMJudgment(
+            assessment="likely_legitimate",
+            reason="This sale looks fine.",
+            confidence=0.9,
+        )
+    )
+    monkeypatch.setattr(pipeline_module, "_judge_model", lambda: judge)
+
+    result = await pipeline_module.llm_check_node(
+        {
+            "messages": [],
+            "report_draft": valid_draft(),
+            "deterministic_result": verdict(
+                outcome="unavailable",
+                reason="Historical comparison was unavailable.",
+                confidence=0.0,
+            ),
+        }
+    )
+
+    assert judge.calls == 0
+    assert result["llm_result"].outcome == "unavailable"
+    assert result["llm_result"].is_anomalous is False
+
+
+def test_tier2_cannot_turn_unavailable_into_normal() -> None:
+    unavailable = verdict(
+        outcome="unavailable",
+        reason="Historical comparison was unavailable.",
+        confidence=0.0,
+    )
+    ml_pass = verdict(outcome="pass", method="ml")
+    state = cast(
+        PipelineState,
+        {
+            "messages": [],
+            "deterministic_result": unavailable,
+            "ml_result": ml_pass,
+        },
+    )
+
+    resolved = pipeline_module._resolve_verdict(state)
+    assert resolved.outcome == "unavailable"
+    assert resolved.is_anomalous is False
+    assert pipeline_module.route_after_deterministic(state) == "processing_unavailable"
+
+
+def test_missing_tier1_outcome_does_not_default_to_normal() -> None:
+    state = cast(
+        PipelineState,
+        {"messages": [], "ml_result": verdict(outcome="pass", method="ml")},
+    )
+
+    resolved = pipeline_module._resolve_verdict(state)
+    assert resolved.outcome == "unavailable"
+    assert resolved.is_anomalous is False
+    assert pipeline_module.route_after_deterministic(state) == "processing_unavailable"
+
+
+def test_accept_node_does_not_accept_unavailable() -> None:
+    unavailable = verdict(
+        outcome="unavailable",
+        reason="Historical comparison was unavailable.",
+        confidence=0.0,
+    )
+
+    result = pipeline_module.accept_node(
+        cast(
+            PipelineState,
+            {
+                "messages": [],
+                "report_draft": valid_draft(),
+                "deterministic_result": unavailable,
+            },
+        )
+    )
+
+    assert "not saved" in result["messages"][0].content.lower()
+    assert "accepted" not in result["messages"][0].content.lower()
+
+
+async def test_finalize_refuses_unavailable_even_when_called_directly(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+    patch_save_report(monkeypatch, captured)
+    unavailable = verdict(
+        outcome="unavailable",
+        reason="Historical comparison was unavailable.",
+        confidence=0.0,
+    )
+
+    output = await pipeline_module.finalize_report_node(
+        {
+            "messages": [HumanMessage(content="sold 2kg copper at 500 per kg")],
+            "original_message": "sold 2kg copper at 500 per kg",
+            "report_draft": valid_draft(),
+            "deterministic_result": unavailable,
+            "verdict": unavailable,
+        },
+        {"configurable": {"thread_id": "picker-42"}},
+    )
+
+    assert captured == {}
+    assert "final_report" not in output
+    assert "not saved" in output["messages"][0].content.lower()
 
 
 async def test_finalize_report_persists_the_report(
@@ -587,6 +778,7 @@ async def test_finalize_report_persists_the_report(
             "messages": [HumanMessage(content="sold 2kg copper at 500 per kg")],
             "original_message": "sold 2kg copper at 500 per kg",
             "report_draft": draft,
+            "deterministic_result": result,
             "verdict": result,
         },
         {"configurable": {"thread_id": "picker-42"}},
@@ -611,6 +803,7 @@ async def test_finalize_report_prefers_authenticated_picker_id(
             "messages": [HumanMessage(content="sold 2kg copper at 500 per kg")],
             "original_message": "sold 2kg copper at 500 per kg",
             "report_draft": valid_draft(),
+            "deterministic_result": verdict(reason="Price is within range."),
             "verdict": verdict(reason="Price is within range."),
         },
         {"configurable": {"thread_id": "thread-1", "picker_id": "user_123"}},
