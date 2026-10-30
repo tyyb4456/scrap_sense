@@ -150,6 +150,7 @@ def test_report_draft_extracts_structured_details(
     result = pipeline_module.report_draft(
         {
             "messages": [HumanMessage(content="sold 2kg copper at 500 per kg")],
+            "original_message": "sold 2kg copper at 500 per kg",
             "validation_result": None,
             "deterministic_result": stale,
             "ml_result": stale,
@@ -175,7 +176,10 @@ def test_extraction_failure_falls_back_to_clarification(
     monkeypatch.setattr(pipeline_module, "_extraction_model", lambda: ExplodingModel())
 
     result = pipeline_module.report_draft(
-        {"messages": [HumanMessage(content="sold 2kg copper")]}
+        {
+            "messages": [HumanMessage(content="sold 2kg copper")],
+            "original_message": "sold 2kg copper",
+        }
     )
 
     draft = result["report_draft"]
@@ -394,7 +398,10 @@ async def test_pipeline_accepts_a_valid_report(
     graph = pipeline_module.build_pipeline()
 
     result = await graph.ainvoke(
-        {"messages": [HumanMessage(content="sold 2kg copper at 500 per kg")]},
+        {
+            "messages": [HumanMessage(content="sold 2kg copper at 500 per kg")],
+            "original_message": "sold 2kg copper at 500 per kg",
+        },
         {"configurable": {"thread_id": "user_123"}},
     )
 
@@ -426,7 +433,10 @@ async def test_invalid_report_never_reaches_anomaly_or_llm_tiers(
     graph = pipeline_module.build_pipeline()
 
     result = await graph.ainvoke(
-        {"messages": [HumanMessage(content="sold 2kg copper for minus 5")]},
+        {
+            "messages": [HumanMessage(content="sold 2kg copper for minus 5")],
+            "original_message": "sold 2kg copper for minus 5",
+        },
         {"configurable": {"thread_id": "user_123"}},
     )
 
@@ -453,7 +463,10 @@ async def test_ml_tier_is_reached_for_every_valid_report(
     graph = pipeline_module.build_pipeline()
 
     await graph.ainvoke(
-        {"messages": [HumanMessage(content="sold 2kg copper at 500 per kg")]},
+        {
+            "messages": [HumanMessage(content="sold 2kg copper at 500 per kg")],
+            "original_message": "sold 2kg copper at 500 per kg",
+        },
         {"configurable": {"thread_id": "user_123"}},
     )
 
@@ -488,7 +501,10 @@ async def test_llm_tier_is_reachable_when_enabled_and_suspicious(
     graph = pipeline_module.build_pipeline()
 
     result = await graph.ainvoke(
-        {"messages": [HumanMessage(content="sold 2kg copper at 500 per kg")]},
+        {
+            "messages": [HumanMessage(content="sold 2kg copper at 500 per kg")],
+            "original_message": "sold 2kg copper at 500 per kg",
+        },
         {"configurable": {"thread_id": "user_123"}},
     )
 
@@ -515,7 +531,10 @@ async def test_llm_tier_is_skipped_when_disabled(
     graph = pipeline_module.build_pipeline()
 
     result = await graph.ainvoke(
-        {"messages": [HumanMessage(content="sold 2kg copper at 500 per kg")]},
+        {
+            "messages": [HumanMessage(content="sold 2kg copper at 500 per kg")],
+            "original_message": "sold 2kg copper at 500 per kg",
+        },
         {"configurable": {"thread_id": "user_123"}},
     )
 
@@ -540,7 +559,10 @@ async def test_insufficient_evidence_accepts_without_pretending_to_verify(
     graph = pipeline_module.build_pipeline()
 
     result = await graph.ainvoke(
-        {"messages": [HumanMessage(content="sold 2kg copper at 500 per kg")]},
+        {
+            "messages": [HumanMessage(content="sold 2kg copper at 500 per kg")],
+            "original_message": "sold 2kg copper at 500 per kg",
+        },
         {"configurable": {"thread_id": "user_123"}},
     )
 
@@ -563,6 +585,7 @@ async def test_finalize_report_persists_the_report(
     output = await pipeline_module.finalize_report_node(
         {
             "messages": [HumanMessage(content="sold 2kg copper at 500 per kg")],
+            "original_message": "sold 2kg copper at 500 per kg",
             "report_draft": draft,
             "verdict": result,
         },
@@ -586,6 +609,7 @@ async def test_finalize_report_prefers_authenticated_picker_id(
     await pipeline_module.finalize_report_node(
         {
             "messages": [HumanMessage(content="sold 2kg copper at 500 per kg")],
+            "original_message": "sold 2kg copper at 500 per kg",
             "report_draft": valid_draft(),
             "verdict": verdict(reason="Price is within range."),
         },
@@ -616,7 +640,10 @@ async def test_pipeline_asks_for_clarification(
     graph = pipeline_module.build_pipeline()
 
     result = await graph.ainvoke(
-        {"messages": [HumanMessage(content="sold 2kg copper")]}
+        {
+            "messages": [HumanMessage(content="sold 2kg copper")],
+            "original_message": "sold 2kg copper",
+        }
     )
 
     assert result.get("verdict") is None

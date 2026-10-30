@@ -7,9 +7,9 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import Any, NotRequired, cast
 
-from deepagents import create_deep_agent
+from deepagents import DeepAgentState, create_deep_agent
 from deepagents.backends import CompositeBackend, StateBackend, StoreBackend
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
@@ -43,6 +43,17 @@ Be concise and practical.
 """.strip()
 
 
+class MainAgentState(DeepAgentState):
+    """Coordinator state carrying the verbatim picker message.
+
+    This field is set from the authenticated request at the chat boundary and is
+    propagated by Deep Agents into the compiled report-intake subagent. It is
+    never derived from the coordinator's task description.
+    """
+
+    original_message: NotRequired[str | None]
+
+
 @dataclass
 class AgentContext:
     """Runtime context passed to agent execution per-request."""
@@ -71,6 +82,7 @@ def build_agent(
     return create_deep_agent(
         model=build_xkiro_llm(settings=settings),
         system_prompt=SYSTEM_PROMPT,
+        state_schema=MainAgentState,
         subagents=[scrap_pipeline_agent],
         tools=[estimate_price],
         context_schema=AgentContext,

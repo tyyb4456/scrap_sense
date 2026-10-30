@@ -32,7 +32,7 @@ import asyncio
 import logging
 from typing import Any
 
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, START, StateGraph
 
@@ -131,26 +131,36 @@ def _neutral_verdict(
     )
 
 
-def report_draft(state: PipelineState) -> dict[str, Any]:
-    """Single LLM call: raw text -> structured fields."""
-    messages = state.get("messages") or []
-    raw_text = str(messages[-1].content) if messages else ""
-    logger.info("Extracting report (message length=%d)", len(raw_text))
+def _original_message_from_config(config: RunnableConfig | None) -> str | None:
+    """Read the picker message carried as trusted run configuration."""
+    if not config:
+        return None
+    configurable = config.get("configurable") or {}
+    value = configurable.get("original_message")
+    if isinstance(value, str) and value.strip():
+        return value
+    return None
 
-    prompt = EXTRACTION_PROMPT.format(raw_text=raw_text)
 
-    try:
-        draft = _extraction_model().invoke([{"role": "user", "content": prompt}])
-        if draft is None:
-            raise ValueError("model returned no structured output (None)")
-        logger.info(
-            "Extraction succeeded: material=%s quantity_kg=%s price_per_kg=%s",
-            draft.material,
-            draft.quantity_kg,
-            draft.price_per_kg,
-        )
-    except Exception as exc:
-        logger.warning("Extraction failed (%s), falling back to clarification", type(exc).__name__)
+def _original_message(
+    state: PipelineState,
+    config: RunnableConfig | None,
+) -> str | None:
+    """Return the verbatim picker message, never a coordinator description."""
+    value = state.get("original_message")
+    if isinstance(value, str) and value.strip():
+        return value
+    return _original_message_from_config(config)
+
+
+def report_draft(
+    state: PipelineState,
+    config: RunnableConfig | None = None,
+) -> dict[str, Any]:
+    """Single LLM call: original picker message -> structured fields."""
+    raw_text = _original_message(state, config)
+    if raw_text is None:
+        logger.error("No original picker message available; refusing extraction")
         draft = ReportDraft(
             material=None,
             price_per_kg=None,
@@ -162,8 +172,45 @@ def report_draft(state: PipelineState) -> dict[str, Any]:
             observed_at=None,
             confidence=None,
             needs_clarification=True,
-            clarification_question="Could you clarify the material type, quantity, and price?",
+            clarification_question=(
+                "I couldn't verify the original message, so I didn't save a report. "
+                "Please resend your sale details."
+            ),
         )
+    else:
+        logger.info("Extracting report (message length=%d)", len(raw_text))
+        prompt = EXTRACTION_PROMPT.format(raw_text=raw_text)
+
+        try:
+            draft = _extraction_model().invoke([{"role": "user", "content": prompt}])
+            if draft is None:
+                raise ValueError("model returned no structured output (None)")
+            logger.info(
+                "Extraction succeeded: material=%s quantity_kg=%s price_per_kg=%s",
+                draft.material,
+                draft.quantity_kg,
+                draft.price_per_kg,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Extraction failed (%s), falling back to clarification",
+                type(exc).__name__,
+            )
+            draft = ReportDraft(
+                material=None,
+                price_per_kg=None,
+                quantity_kg=None,
+                currency="PKR",
+                unit="kg",
+                city=None,
+                area=None,
+                observed_at=None,
+                confidence=None,
+                needs_clarification=True,
+                clarification_question=(
+                    "Could you clarify the material type, quantity, and price?"
+                ),
+            )
 
     return {
         "report_draft": draft,
@@ -175,6 +222,13 @@ def report_draft(state: PipelineState) -> dict[str, Any]:
         "final_report": None,
         "structured_response": None,
     }
+
+
+def _report_draft_node(
+    state: PipelineState,
+    config: RunnableConfig,
+) -> dict[str, Any]:
+    return report_draft(state, config)
 
 
 def validate_and_build(state: PipelineState) -> dict[str, Any]:
@@ -426,15 +480,21 @@ async def finalize_report_node(
         }
 
     verdict = _resolve_verdict(state)
-    messages = state.get("messages") or []
-    raw_text = next(
-        (
-            str(message.content)
-            for message in messages
-            if isinstance(message, HumanMessage) and message.content
-        ),
-        "",
-    )
+    raw_text = _original_message(state, config)
+    if raw_text is None:
+        logger.error(
+            "Refusing to persist a report without the original picker message"
+        )
+        return {
+            "messages": [
+                AIMessage(
+                    content=(
+                        "I couldn't verify the original message, so the report was "
+                        "not saved. Please resend your sale details."
+                    )
+                )
+            ]
+        }
     picker_id = _picker_id_from_config(config)
 
     try:
@@ -488,7 +548,7 @@ def route_after_ml(state: PipelineState) -> str:
 def build_pipeline():
     graph = StateGraph(PipelineState)
 
-    graph.add_node("report_draft", report_draft)
+    graph.add_node("report_draft", _report_draft_node)
     graph.add_node("validate_and_build", validate_and_build)
     graph.add_node("deterministic_check", deterministic_check_node)
     graph.add_node("ml_check", ml_check_node)

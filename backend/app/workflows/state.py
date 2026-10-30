@@ -13,6 +13,7 @@ from app.services.report_validation import ValidationResult
 
 
 class PipelineState(MessagesState):
+    original_message: NotRequired[str | None]
     report_draft: NotRequired[ReportDraft | None]
     validation_result: NotRequired[ValidationResult | None]
     deterministic_result: NotRequired[AnomalyVerdict | None]

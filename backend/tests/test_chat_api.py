@@ -194,8 +194,13 @@ def test_chat_returns_the_main_agent_reply() -> None:
     message = call["payload"]["messages"][0]
     assert isinstance(message, HumanMessage)
     assert message.content == "plastic ka rate kya hai?"
+    assert call["payload"]["original_message"] == "plastic ka rate kya hai?"
     assert call["config"]["configurable"]["thread_id"] == thread_id
     assert call["config"]["configurable"]["picker_id"] == "user_123"
+    assert (
+        call["config"]["configurable"]["original_message"]
+        == "plastic ka rate kya hai?"
+    )
     assert call["context"] == AgentContext(picker_id="user_123")
 
 

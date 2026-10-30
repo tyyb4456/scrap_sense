@@ -118,11 +118,15 @@ async def chat(
 
     try:
         result = await agent.ainvoke(
-            {"messages": [HumanMessage(content=payload.message)]},
+            {
+                "messages": [HumanMessage(content=payload.message)],
+                "original_message": payload.message,
+            },
             config={
                 "configurable": {
                     "thread_id": thread_id,
                     "picker_id": user.user_id,
+                    "original_message": payload.message,
                 }
             },
             context=AgentContext(picker_id=user.user_id),
