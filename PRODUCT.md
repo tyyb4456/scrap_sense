@@ -77,11 +77,14 @@ gap-analysis loop.
 
 Constraints and terminology:
 
-- Chat checkpoints and per-picker long-term memory live in PostgreSQL; deleting a thread does not
-  delete `/memories/picker_notes.md`.
+- Chat checkpoints and per-picker long-term memory live in PostgreSQL. Deleting a thread removes
+  that thread's checkpoints but does not delete `/memories/picker_notes.md`; the explicit
+  `DELETE /api/v1/chat/memory` path erases those notes.
 - Raw report text is sent verbatim to the configured model provider.
-- Identity is an anonymized picker id; location is stored at neighborhood/city level only, never
-  precise GPS.
+- Identity is a pseudonymous picker id derived from the Clerk `sub` claim. It is linkable to the
+  signed-in account and is not an anonymous identity. Location is stored at neighborhood/city
+  level only, never precise GPS, but the raw message may contain a name, phone number, or precise
+  address.
 - The database is required; there is no offline mode.
 - Device assumption confirmed by the user: a modern smartphone browser. Low-end hardware, weak
   connectivity, and shared devices are not treated as binding design constraints at this stage.

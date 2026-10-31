@@ -611,7 +611,7 @@ async def finalize_report_node(
     elif final_report.is_anomalous:
         summary = f"{summary} It is excluded from price estimates pending review."
 
-    logger.info("Saved final report %s for picker %s", final_report.id, picker_id)
+    logger.info("Saved final report %s", final_report.id)
     return {
         "verdict": verdict,
         "final_report": final_report,

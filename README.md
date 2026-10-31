@@ -164,7 +164,10 @@ Chat (requires `Authorization: Bearer <Clerk session token>`):
 - `GET /api/v1/chat/threads` lists the signed-in user's threads.
 - `POST /api/v1/chat/threads` creates a new thread.
 - `GET /api/v1/chat/threads/{thread_id}/messages` returns the stored conversation history.
-- `DELETE /api/v1/chat/threads/{thread_id}` deletes the thread and its checkpoints.
+- `DELETE /api/v1/chat/threads/{thread_id}` deletes the thread and its checkpoints. It does not
+  delete the picker's long-term notes or any report rows.
+- `DELETE /api/v1/chat/memory` erases the signed-in picker's long-term agent notes. Notes are
+  shared across that picker's threads, so this is separate from deleting one thread.
 
 ```json
 {
@@ -182,6 +185,8 @@ Chat (requires `Authorization: Bearer <Clerk session token>`):
 ```
 
 The Clerk `sub` claim is the picker id for reports and the namespace for long-term agent memory.
+It is a pseudonymous account identifier, not an anonymous identity: the report row is linkable to
+that Clerk user, and the raw message may itself contain a name, phone number, or precise address.
 Threads are server-created UUIDs stored against that picker id; every thread endpoint verifies
 ownership before reading, appending, or deleting. A client cannot choose another user's identity
 or use another user's thread id. The pipeline receives the picker id separately from the thread id,
@@ -347,14 +352,20 @@ npm run build
 
 The price and review integration tests run against the configured PostgreSQL database. Start it
 with `docker compose up -d db` and apply migrations with `uv run alembic upgrade head`; without a
-reachable database those tests skip instead of failing. The suite currently contains 194 tests.
+reachable database those tests skip instead of failing. The suite currently contains 202 tests.
 
 ## Known limitations
 
-- Submitted raw text is sent to the configured model provider.
+- Submitted raw text is sent verbatim to the configured model provider.
 - Chat checkpoints and agent memory are persisted in PostgreSQL. Deleting a thread removes its
-  checkpoints, but the user's long-term `/memories/picker_notes.md` memory is shared across that
-  user's threads and is not deleted with a single thread.
+  checkpoints; the picker's long-term `/memories/picker_notes.md` memory is shared across that
+  picker's threads and is erased by `DELETE /api/v1/chat/memory`. There is no automatic retention
+  or scheduled deletion job yet.
+- Report rows keep the raw message and the Clerk-derived picker id until an operator removes them.
+  There is no self-service report-erasure endpoint and no automatic expiry. A proposed policy
+  (not implemented) is described in `SECURITY_AND_PRIVACY.md`.
+- Raw messages, checkpoints, and notes are stored unencrypted at the application layer; database
+  and backup encryption are deployment responsibilities and are not configured in this repository.
 - Price evidence is thin until enough pickers report. The published seed file is empty, so with
   fewer than the configured minimum observations the API returns `unavailable`, not a guess.
 - A new city/material combination cannot self-bootstrap. Tier 1 has no national or seed comparison

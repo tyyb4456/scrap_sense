@@ -26,7 +26,9 @@ from app.tools.price_estimator import estimate_price
 
 logger = logging.getLogger(__name__)
 
-SYSTEM_PROMPT = """
+MEMORY_FILE_PATH = "/memories/picker_notes.md"
+
+SYSTEM_PROMPT = f"""
 You are ScrapSense, a helpful copilot for waste pickers.
 
 Your job:
@@ -36,11 +38,16 @@ Your job:
 - If the subagent asks for clarification, relay that question back to the picker
   in a short, friendly way.
 - When they ask what a material is worth, use the `estimate_price` tool.
-- Keep /memories/picker_notes.md up to date with useful facts the picker shares,
+- Keep {MEMORY_FILE_PATH} up to date with useful facts the picker shares,
   such as their usual area or the materials they collect.
 
 Be concise and practical.
 """.strip()
+
+
+def memory_namespace(picker_id: str) -> tuple[str, ...]:
+    """Return the persistent store namespace for one picker's long-term notes."""
+    return (picker_id,)
 
 
 class MainAgentState(DeepAgentState):
@@ -72,7 +79,7 @@ def build_agent(
         default=StateBackend(),
         routes={
             "/memories/": StoreBackend(
-                namespace=lambda rt: (rt.context.picker_id,),
+                namespace=lambda rt: memory_namespace(rt.context.picker_id),
                 store=store,
             ),
         },
@@ -89,19 +96,20 @@ def build_agent(
         checkpointer=checkpointer,
         store=store,
         backend=backend,
-        memory=["/memories/picker_notes.md"],
+        memory=[MEMORY_FILE_PATH],
     )
 
 
 _agent: Any = None
 _pool: AsyncConnectionPool[AsyncConnection[dict[str, Any]]] | None = None
 _checkpointer: BaseCheckpointSaver | None = None
+_store: BaseStore | None = None
 _lock = asyncio.Lock()
 
 
 async def aget_agent() -> Any:
     """Open the shared Postgres pool and build the agent on first use."""
-    global _agent, _pool, _checkpointer
+    global _agent, _pool, _checkpointer, _store
 
     if _agent is not None:
         return _agent
@@ -145,6 +153,7 @@ async def aget_agent() -> Any:
         _pool = pool
         _agent = agent
         _checkpointer = checkpointer
+        _store = store
         logger.info("Deep agent initialized successfully with a shared Postgres pool.")
         return _agent
 
@@ -158,9 +167,18 @@ async def aget_checkpointer() -> BaseCheckpointSaver:
     return _checkpointer
 
 
+async def aget_store() -> BaseStore:
+    """Return the shared long-term memory store, initializing the agent if needed."""
+    if _store is None:
+        await aget_agent()
+    if _store is None:
+        raise RuntimeError("Long-term memory storage is unavailable")
+    return _store
+
+
 async def aclose_agent() -> None:
     """Close the shared Postgres pool when the application shuts down."""
-    global _agent, _pool, _checkpointer
+    global _agent, _pool, _checkpointer, _store
 
     async with _lock:
         if _pool is not None:
@@ -168,6 +186,7 @@ async def aclose_agent() -> None:
         _pool = None
         _agent = None
         _checkpointer = None
+        _store = None
 
 
 if __name__ == "__main__":

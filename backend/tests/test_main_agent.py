@@ -45,7 +45,7 @@ def test_build_agent_wires_postgres_resources(
     assert captured["checkpointer"] is checkpointer
     assert captured["store"] is store
     assert captured["backend"] is not None
-    assert captured["memory"] == ["/memories/picker_notes.md"]
+    assert captured["memory"] == [main_agent.MEMORY_FILE_PATH]
 
 
 def test_agent_context_carries_picker_id() -> None:

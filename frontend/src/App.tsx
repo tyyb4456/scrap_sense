@@ -120,8 +120,8 @@ function Landing() {
 
             <p className="mt-5 flex max-w-[42ch] items-start gap-2 text-[13px] leading-5 text-muted">
               <ShieldIcon className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-              Reports are anonymous. Your name is never attached, and only pooled results are
-              published.
+              Reports are linked to a private account ID, not a public profile. Only pooled
+              results are published. Please avoid sharing names or phone numbers.
             </p>
 
             <p className="mt-8 text-[13px] leading-4 text-faint">

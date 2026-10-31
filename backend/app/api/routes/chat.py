@@ -9,7 +9,12 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from langchain_core.messages import AIMessage, HumanMessage
 
-from app.agents.main_agent import AgentContext, aget_agent, aget_checkpointer
+from app.agents.main_agent import (
+    AgentContext,
+    aget_agent,
+    aget_checkpointer,
+    aget_store,
+)
 from app.auth import ClerkUser, require_auth
 from app.models.chat_thread import DEFAULT_THREAD_TITLE, ChatThread
 from app.schemas.chat import (
@@ -20,6 +25,7 @@ from app.schemas.chat import (
     ChatThreadRead,
 )
 from app.services.chat_history import load_thread_messages
+from app.services.chat_memory import delete_picker_memory
 from app.services.chat_threads import ChatThreadStore, get_chat_thread_store
 
 logger = logging.getLogger(__name__)
@@ -48,6 +54,18 @@ async def get_checkpointer() -> Any:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="ScrapSense history is unavailable",
+        ) from None
+
+
+async def get_memory_store() -> Any:
+    """Return the shared long-term memory store (overridable in tests)."""
+    try:
+        return await aget_store()
+    except Exception:
+        logger.exception("Could not initialize long-term memory storage")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="ScrapSense notes are unavailable",
         ) from None
 
 
@@ -147,7 +165,11 @@ async def chat(
         )
 
     title = _thread_title(payload.message) if thread.title == DEFAULT_THREAD_TITLE else None
-    await store.touch_thread(thread_id=thread.id, title=title)
+    await store.touch_thread(
+        user_id=user.user_id,
+        thread_id=thread.id,
+        title=title,
+    )
 
     return ChatResponse(user_id=user.user_id, thread_id=thread.id, reply=reply)
 
@@ -214,5 +236,28 @@ async def delete_thread(
             detail="Could not delete chat history",
         ) from None
 
-    await store.delete_thread(thread_id=thread.id)
+    await store.delete_thread(user_id=user.user_id, thread_id=thread.id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.delete("/memory", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_memory(
+    user: Annotated[ClerkUser, Depends(require_auth)],
+    store: Annotated[Any, Depends(get_memory_store)],
+) -> Response:
+    """Erase the signed-in picker's long-term agent notes.
+
+    This is deliberately separate from thread deletion: notes are shared across
+    all of a picker's threads, while a thread delete only removes that thread's
+    rows and checkpoints. Report rows are also separate and are not touched.
+    """
+    try:
+        await delete_picker_memory(store=store, picker_id=user.user_id)
+    except Exception:
+        logger.exception("Could not delete picker memory")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Could not delete saved notes",
+        ) from None
+
     return Response(status_code=status.HTTP_204_NO_CONTENT)

@@ -207,7 +207,9 @@ function SidebarContent({
             <p className="truncate text-[12px] font-medium leading-4">
               {demo ? 'Demo picker' : 'Picker account'}
             </p>
-            <p className="truncate text-[11px] leading-4 text-muted">Reports are anonymous</p>
+            <p className="truncate text-[11px] leading-4 text-muted">
+              Reports use a private account ID
+            </p>
           </div>
           <ThemeToggle className="-mr-1" />
         </div>

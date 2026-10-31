@@ -10,8 +10,8 @@ from typing import Any
 from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage, HumanMessage
 
-from app.agents.main_agent import AgentContext
-from app.api.routes.chat import get_chat_agent, get_checkpointer
+from app.agents.main_agent import AgentContext, memory_namespace
+from app.api.routes.chat import get_chat_agent, get_checkpointer, get_memory_store
 from app.auth import ClerkUser, require_auth
 from app.core.config import Settings, get_settings
 from app.main import app
@@ -113,18 +113,52 @@ class FakeThreadStore:
     async def touch_thread(
         self,
         *,
+        user_id: str,
         thread_id: uuid.UUID,
         title: str | None = None,
     ) -> None:
         thread = self.threads.get(thread_id)
-        if thread is None:
+        if thread is None or thread.user_id != user_id:
             return
         if title is not None:
             thread.title = title
         thread.updated_at = datetime.now(UTC)
 
-    async def delete_thread(self, *, thread_id: uuid.UUID) -> None:
+    async def delete_thread(self, *, user_id: str, thread_id: uuid.UUID) -> None:
+        thread = self.threads.get(thread_id)
+        if thread is None or thread.user_id != user_id:
+            return
         self.threads.pop(thread_id, None)
+
+
+class FakeMemoryStore:
+    def __init__(self) -> None:
+        self.items: dict[tuple[str, ...], dict[str, Any]] = {}
+
+    async def asearch(
+        self,
+        namespace: tuple[str, ...],
+        *,
+        limit: int = 10,
+        offset: int = 0,
+        **_kwargs: Any,
+    ) -> list[SimpleNamespace]:
+        keys = sorted(self.items.get(namespace, {}))
+        return [
+            SimpleNamespace(key=key, value=self.items[namespace][key])
+            for key in keys[offset : offset + limit]
+        ]
+
+    async def adelete(self, namespace: tuple[str, ...], key: str) -> None:
+        self.items.get(namespace, {}).pop(key, None)
+
+
+class ExplodingMemoryStore:
+    async def asearch(self, *_args: Any, **_kwargs: Any) -> list[Any]:
+        raise RuntimeError("memory store is down")
+
+    async def adelete(self, *_args: Any, **_kwargs: Any) -> None:
+        raise RuntimeError("memory store is down")
 
 
 class FakeCheckpointer:
@@ -150,15 +184,18 @@ def chat_client(
     agent: Any | None = None,
     store: FakeThreadStore | None = None,
     checkpointer: FakeCheckpointer | None = None,
+    memory_store: Any | None = None,
     user: ClerkUser = USER,
 ) -> Iterator[tuple[TestClient, FakeThreadStore, FakeCheckpointer]]:
     thread_store = store or FakeThreadStore()
     checkpoint_store = checkpointer or FakeCheckpointer()
     chat_agent = agent or FakeAgent(checkpointer=checkpoint_store)
+    picker_memory = memory_store or FakeMemoryStore()
     app.dependency_overrides[require_auth] = lambda: user
     app.dependency_overrides[get_chat_agent] = lambda: chat_agent
     app.dependency_overrides[get_chat_thread_store] = lambda: thread_store
     app.dependency_overrides[get_checkpointer] = lambda: checkpoint_store
+    app.dependency_overrides[get_memory_store] = lambda: picker_memory
     try:
         with TestClient(app) as client:
             yield client, thread_store, checkpoint_store
@@ -346,3 +383,61 @@ def test_chat_returns_502_when_agent_has_no_text() -> None:
     response = post_with_agent(FakeAgent(reply=""), {"message": "hello"})
 
     assert response.status_code == 502
+
+
+def test_delete_memory_removes_only_the_authenticated_pickers_notes() -> None:
+    memory = FakeMemoryStore()
+    memory.items[memory_namespace(USER.user_id)] = {
+        "/picker_notes.md": {"content": "mine"},
+    }
+    memory.items[memory_namespace(OTHER_USER.user_id)] = {
+        "/picker_notes.md": {"content": "theirs"},
+    }
+
+    with chat_client(memory_store=memory) as (client, _, _):
+        response = client.delete("/api/v1/chat/memory")
+
+    assert response.status_code == 204
+    assert memory.items[memory_namespace(USER.user_id)] == {}
+    assert memory.items[memory_namespace(OTHER_USER.user_id)] == {
+        "/picker_notes.md": {"content": "theirs"},
+    }
+
+
+def test_delete_memory_is_idempotent() -> None:
+    memory = FakeMemoryStore()
+    memory.items[memory_namespace(USER.user_id)] = {
+        "/picker_notes.md": {"content": "mine"},
+    }
+
+    with chat_client(memory_store=memory) as (client, _, _):
+        first = client.delete("/api/v1/chat/memory")
+        second = client.delete("/api/v1/chat/memory")
+
+    assert first.status_code == 204
+    assert second.status_code == 204
+
+
+def test_deleting_a_thread_does_not_delete_long_term_memory() -> None:
+    store = FakeThreadStore()
+    memory = FakeMemoryStore()
+    thread = store.seed()
+    memory.items[memory_namespace(USER.user_id)] = {
+        "/picker_notes.md": {"content": "mine"},
+    }
+
+    with chat_client(store=store, memory_store=memory) as (client, _, _):
+        response = client.delete(f"/api/v1/chat/threads/{thread.id}")
+
+    assert response.status_code == 204
+    assert memory.items[memory_namespace(USER.user_id)] == {
+        "/picker_notes.md": {"content": "mine"},
+    }
+
+
+def test_delete_memory_returns_503_when_the_store_fails() -> None:
+    with chat_client(memory_store=ExplodingMemoryStore()) as (client, _, _):
+        response = client.delete("/api/v1/chat/memory")
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "Could not delete saved notes"

@@ -126,7 +126,9 @@ There's no existing dataset for "fair scrap prices by material and region" — i
 
 ### Privacy notes
 - Location stored at neighborhood/city level only — never precise GPS
-- Reporter identity is an anonymized ID, never a real name or phone number in plaintext
+- Reporter identity is a pseudonymous picker id derived from the Clerk `sub` claim; it is
+  linkable to the signed-in account, not anonymous. No separate name/phone columns exist, but
+  the raw message may contain them.
 - Any dealer-referencing data stays as anonymized aggregate signals only, never a named public callout — this protects the picker from retaliation risk, not just a legal formality
 
 ---
@@ -229,25 +231,28 @@ Chat is now authenticated, but the current path still has gaps that are tracked 
 rather than hidden:
 
 - **Clerk owns identity; threads are server-owned.** The picker id comes from the Clerk `sub`
-  claim, and each thread has a server-generated UUID stored against that picker id. Clients
-  cannot create a thread under another user or read/delete one they do not own. Reviewer
-  separation is now implemented through `ADMIN_USER_IDS`; there is no finer-grained role model.
+  claim and is pseudonymous, not anonymous: it is linkable to the signed-in account. Each thread
+  has a server-generated UUID stored against that picker id. Clients cannot create a thread under
+  another user or read/delete one they do not own. Reviewer separation is now implemented through
+  `ADMIN_USER_IDS`; there is no finer-grained role model.
 - **Raw source text reaches the model provider.** `POST /api/v1/chat` sends the
   picker's message verbatim to the configured LLM; the message may contain a
   name, phone number or precise address.
 - **Conversation history and agent memory are persisted.** LangGraph checkpoints and the
   long-term store live in PostgreSQL, so a database compromise exposes chat history and
   `/memories/picker_notes.md` contents. There is no encryption-at-rest policy yet.
-- **Thread deletion, but no memory deletion.** Deleting a thread removes its checkpoints, but the
-  per-user `/memories/picker_notes.md` is intentionally shared across that user's threads and
-  cannot be erased yet.
+- **Thread deletion is separate from memory deletion.** Deleting a thread removes its
+  checkpoints. The per-user `/memories/picker_notes.md` is intentionally shared across that
+  user's threads and is erased by the explicit `DELETE /api/v1/chat/memory` endpoint.
 - **Thin market evidence and no verified seed entries.** Reports are now aggregated into
   price references, but low report volume and the empty seed file mean many requests
   correctly return `unavailable`. The schema stores PKR/kg only; an optional sale time is stored
   in `observed_at` and falls back to `created_at` when absent.
-- **No retention policy.** Checkpoints and memories accumulate until someone removes them.
+- **No retention policy.** Checkpoints, memories, and report rows accumulate until someone
+  removes them. The memory endpoint is manual erasure, not automatic expiry.
 - **No rate limiting or durable idempotency.** A retried chat request can create another thread
   and/or duplicate a report; duplicate suppression in price aggregation is only a short-window
   guard, not a submission-level guarantee.
-- **Reviewer projections are anonymized.** The queue omits picker identity, Clerk identifiers,
-  raw text, and thread information, but raw text still exists in the report row and checkpoints.
+- **Reviewer projections are identity-minimized.** The queue omits picker identity, Clerk
+  identifiers, raw text, and thread information, but raw text still exists in the report row and
+  checkpoints.

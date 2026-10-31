@@ -57,6 +57,7 @@ class ChatThreadStore:
     async def touch_thread(
         self,
         *,
+        user_id: str,
         thread_id: uuid.UUID,
         title: str | None = None,
     ) -> None:
@@ -64,12 +65,22 @@ class ChatThreadStore:
         if title is not None:
             values["title"] = title
         await self._session.execute(
-            update(ChatThread).where(ChatThread.id == thread_id).values(**values)
+            update(ChatThread)
+            .where(
+                ChatThread.id == thread_id,
+                ChatThread.user_id == user_id,
+            )
+            .values(**values)
         )
         await self._session.commit()
 
-    async def delete_thread(self, *, thread_id: uuid.UUID) -> None:
-        await self._session.execute(delete(ChatThread).where(ChatThread.id == thread_id))
+    async def delete_thread(self, *, user_id: str, thread_id: uuid.UUID) -> None:
+        await self._session.execute(
+            delete(ChatThread).where(
+                ChatThread.id == thread_id,
+                ChatThread.user_id == user_id,
+            )
+        )
         await self._session.commit()
 
 
