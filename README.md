@@ -301,6 +301,24 @@ Pending reports are re-evaluated only explicitly, using `reevaluate_pending_repo
 reruns the same Tier 1 thresholds, and leaves the report pending if Tier 1 is still unavailable or
 still has insufficient evidence.
 
+### Cold-start bootstrap limitation
+
+Tier 1 is deliberately local. It reads only accepted, trusted reports with the same normalized
+material, currency, unit, and city; it does not use national report averages, other cities, or seed
+prices. A city/material combination with no accepted history therefore cannot bootstrap itself:
+every valid early report has too few comparables, is stored as `pending_evidence`, and is excluded
+from the baseline that re-evaluation reads. Pending reports never validate one another, and a
+reviewer cannot approve a pending report. Re-evaluation continues to return
+`insufficient_evidence` until independent, same-scope trusted evidence exists.
+
+No legitimate bootstrap source is available in the repository today. The seed file is intentionally
+empty, and seed prices are pricing fallbacks, not statistical comparison distributions. To bootstrap
+a combination, an operator would need to collect and import an audited reference distribution at the
+same city/material/kg/PKR scope (or a documented, statistically justified broader scope with that
+scope recorded explicitly), then let Tier 1 evaluate new reports against it. Until then,
+`pending_evidence` and an `unavailable` price estimate are the honest outcomes. This is a data
+collection gap, not a reason to relax thresholds or accept pending reports.
+
 Tier 2 (ML) is disabled because the repository contains no defensible training set. The interface
 and readiness rule live in `backend/app/services/ml_anomaly.py`. The documented gate is 200 accepted
 comparable reports across at least three materials and two cities, with a time-based train/validation
@@ -329,7 +347,7 @@ npm run build
 
 The price and review integration tests run against the configured PostgreSQL database. Start it
 with `docker compose up -d db` and apply migrations with `uv run alembic upgrade head`; without a
-reachable database those tests skip instead of failing. The suite currently contains 188 tests.
+reachable database those tests skip instead of failing. The suite currently contains 194 tests.
 
 ## Known limitations
 
@@ -339,6 +357,9 @@ reachable database those tests skip instead of failing. The suite currently cont
   user's threads and is not deleted with a single thread.
 - Price evidence is thin until enough pickers report. The published seed file is empty, so with
   fewer than the configured minimum observations the API returns `unavailable`, not a guess.
+- A new city/material combination cannot self-bootstrap. Tier 1 has no national or seed comparison
+  fallback, pending reports are excluded from baselines, and pending reports cannot validate each
+  other. See "Cold-start bootstrap limitation" above.
 - Tier 1 is a statistical check, not a fraud detector. It can flag a legitimate unusual sale; a
   human reviewer must approve or reject flagged reports. The LLM tier is off by default and cannot
   clear a flag.

@@ -95,7 +95,7 @@ D:\scrap_sense\
 │   │   └── workflows\
 │   │       ├── pipeline.py           Intake + validation + anomaly tiers + persistence graph.
 │   │       └── state.py              PipelineState.
-│   └── tests\                        188 tests across 19 files, including real PostgreSQL integration.
+│   └── tests\                        194 tests across 20 files, including real PostgreSQL integration.
 │
 ├── frontend\
 │   ├── package.json                 React 19, TS, Vite 8, Clerk, Tailwind 4, oxlint. No test script.
@@ -377,7 +377,7 @@ Statuses are exactly one of **DONE**, **PARTIAL**, **NOT STARTED**, or **DIVERGE
 
 ### 5.13 Tests
 
-- **Backend:** 188 tests; all pass. Coverage includes auth, validation, MAD behavior, cold-start pending evidence and re-evaluation, ML readiness, graph routing, price aggregation, price API, reviewer actions, and real PostgreSQL price/review integration.
+- **Backend:** 194 tests; all pass. Coverage includes auth, validation, MAD behavior, cold-start pending evidence and re-evaluation, ML readiness, graph routing, price aggregation, price API, reviewer actions, and real PostgreSQL price/review integration.
 - **Frontend:** none.
 - **Not covered:** live model/provider calls, full agent → subagent → persistence routing, multi-turn clarification, retention, rate limiting, prompt injection, performance.
 - **Consequence:** the highest-risk remaining wiring gaps are coordinator routing and live provider behavior.
@@ -491,6 +491,7 @@ Per-file results:
 | `tests/test_anomaly_detection.py` | 16 | Passed |
 | `tests/test_auth.py` | 5 | Passed |
 | `tests/test_chat_api.py` | 12 | Passed |
+| `tests/test_cold_start_bootstrap.py` | 6 | Passed (real PostgreSQL) |
 | `tests/test_config.py` | 4 | Passed |
 | `tests/test_health.py` | 3 | Passed |
 | `tests/test_main_agent.py` | 3 | Passed |

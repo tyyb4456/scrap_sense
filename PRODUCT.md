@@ -67,10 +67,13 @@ Built today:
   and explicit empty/access-denied/error states.
 - Deterministic duplicate suppression for identical reports from one picker inside a short window.
 
-Explicitly not built yet: verified seeded field prices (the loader and empty file exist), a trained
-anomaly model (Tier 2 is disabled until real data satisfies the documented readiness threshold), the
-material classifier CNN, image/camera capture, Urdu voice capture or transcription, forecasting,
-reporter reputation, and the coordinator's offline gap-analysis loop.
+Explicitly not built yet: verified seeded field prices (the loader and empty file exist), a
+legitimate cold-start comparison source for new city/material combinations (Tier 1 is city-local,
+seed prices are pricing fallbacks only, and pending reports are excluded from baselines and cannot
+validate one another), a trained anomaly model (Tier 2 is disabled until real data satisfies the
+documented readiness threshold), the material classifier CNN, image/camera capture, Urdu voice
+capture or transcription, forecasting, reporter reputation, and the coordinator's offline
+gap-analysis loop.
 
 Constraints and terminology:
 
