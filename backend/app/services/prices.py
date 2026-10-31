@@ -86,7 +86,8 @@ def observation_from_report(report: Report) -> PriceObservation:
         status=report.status,
         is_anomalous=report.is_anomalous,
         unit="kg",
-        anomaly_outcome="suspicious" if report.is_anomalous else "pass",
+        anomaly_outcome=report.anomaly_outcome,
+        reviewed_at=report.reviewed_at,
     )
 
 

@@ -5,8 +5,9 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.sql.elements import ColumnElement
 
 from app.db.session import SessionLocal
 from app.models.report import Report
@@ -15,6 +16,7 @@ from app.schemas.report import (
     FinalReport,
     ReportDraft,
     tier1_check_completed,
+    tier1_check_insufficient,
 )
 from app.services.price_aggregation import as_utc
 from app.services.report_validation import normalize_city, validate_report_draft
@@ -22,8 +24,14 @@ from app.services.report_validation import normalize_city, validate_report_draft
 REPORT_STATUS_ACCEPTED = "accepted"
 REPORT_STATUS_FLAGGED = "flagged"
 REPORT_STATUS_REJECTED = "rejected"
+REPORT_STATUS_PENDING_EVIDENCE = "pending_evidence"
 REPORT_STATUSES = frozenset(
-    {REPORT_STATUS_ACCEPTED, REPORT_STATUS_FLAGGED, REPORT_STATUS_REJECTED}
+    {
+        REPORT_STATUS_ACCEPTED,
+        REPORT_STATUS_FLAGGED,
+        REPORT_STATUS_REJECTED,
+        REPORT_STATUS_PENDING_EVIDENCE,
+    }
 )
 
 
@@ -63,6 +71,27 @@ def pricing_ineligibility_reason(report: Report) -> str | None:
     return None
 
 
+def trusted_report_condition() -> ColumnElement[bool]:
+    """SQL condition for reports that may contribute trusted evidence.
+
+    Accepted reports with a verified ``pass`` outcome qualify. A statistically
+    suspicious report may qualify only after a reviewer approved it, which is
+    represented by an accepted, non-anomalous row with ``reviewed_at`` set.
+    Pending, flagged, rejected, unknown, and unavailable outcomes never qualify.
+    """
+    return and_(
+        Report.status == REPORT_STATUS_ACCEPTED,
+        Report.is_anomalous.is_(False),
+        or_(
+            Report.anomaly_outcome == "pass",
+            and_(
+                Report.anomaly_outcome == "suspicious",
+                Report.reviewed_at.is_not(None),
+            ),
+        ),
+    )
+
+
 async def save_report(
     *,
     picker_id: str,
@@ -72,14 +101,16 @@ async def save_report(
 ) -> FinalReport:
     """Store a validated report and return its persisted representation.
 
-    ``accepted`` means the report passed the available automatic checks and may
-    influence price aggregation. ``flagged`` means it is suspicious and must
-    stay out of aggregation until an authorized reviewer approves it.
+    ``accepted`` means the report passed Tier 1 and may influence price
+    aggregation. ``flagged`` means it is suspicious and must stay out of
+    aggregation until an authorized reviewer approves it. ``pending_evidence``
+    means Tier 1 ran successfully but lacked enough history; the row is stored
+    for controlled evidence accumulation and is never treated as verified.
 
-    A report whose mandatory Tier 1 check did not complete (``unavailable``,
-    ``insufficient_evidence``, ``error``, ``disabled``, or a missing verdict)
-    is never persisted. The caller must fail the processing attempt safely
-    instead of storing a normal-looking or suspicious-looking row.
+    A report whose mandatory Tier 1 check could not run (``unavailable``,
+    ``error``, ``disabled``, or a missing verdict) is never persisted. The caller
+    must fail the processing attempt safely instead of storing a normal-looking
+    or suspicious-looking row.
     """
     validation = validate_report_draft(draft)
     if not validation.is_valid:
@@ -89,10 +120,16 @@ async def save_report(
         )
     if draft.material is None or draft.price_per_kg is None or draft.quantity_kg is None:
         raise ValueError("Cannot persist a report missing material, price, or quantity")
-    if not tier1_check_completed(verdict):
+    if not (tier1_check_completed(verdict) or tier1_check_insufficient(verdict)):
         raise ReportProcessingUnavailable(verdict.outcome)
 
-    flagged = verdict.is_anomalous or verdict.outcome == "suspicious"
+    if tier1_check_insufficient(verdict):
+        status = REPORT_STATUS_PENDING_EVIDENCE
+        flagged = False
+    else:
+        flagged = verdict.is_anomalous or verdict.outcome == "suspicious"
+        status = REPORT_STATUS_FLAGGED if flagged else REPORT_STATUS_ACCEPTED
+
     report = Report(
         picker_id=picker_id,
         raw_text=raw_text,
@@ -107,7 +144,8 @@ async def save_report(
         is_anomalous=flagged,
         anomaly_reason=verdict.reason,
         anomaly_method=verdict.method,
-        status=REPORT_STATUS_FLAGGED if flagged else REPORT_STATUS_ACCEPTED,
+        anomaly_outcome=verdict.outcome,
+        status=status,
     )
 
     async with SessionLocal() as session:
@@ -138,8 +176,7 @@ async def fetch_reports_for_pricing(
     statement = (
         select(Report)
         .where(
-            Report.status == REPORT_STATUS_ACCEPTED,
-            Report.is_anomalous.is_(False),
+            trusted_report_condition(),
             Report.price_per_kg > 0,
             func.coalesce(Report.observed_at, Report.created_at) >= since,
             func.lower(func.trim(Report.currency)) == currency.lower(),
@@ -176,8 +213,7 @@ async def fetch_comparable_reports(
     statement = (
         select(Report)
         .where(
-            Report.status == REPORT_STATUS_ACCEPTED,
-            Report.is_anomalous.is_(False),
+            trusted_report_condition(),
             Report.price_per_kg > 0,
             func.coalesce(Report.observed_at, Report.created_at) >= since,
             func.lower(func.trim(Report.currency)) == currency.lower(),
@@ -238,14 +274,18 @@ async def review_report(
     reviewer_id: str,
     status: str,
 ) -> Report | None:
-    """Approve or reject a flagged report after human review.
+    """Approve or reject a report after human review.
 
-    Only a ``flagged`` report can receive a human decision. Approval clears the
-    active anomaly flag so the report can influence price aggregation again if
-    every other eligibility rule still passes. Approval is refused when the stored
-    report lacks a valid city because such a report can never enter the pricing
-    dataset. Rejection keeps the row for audit but excludes it by status. Original
-    anomaly evidence is not erased.
+    Only a ``flagged`` report can be approved. A ``pending_evidence`` report
+    cannot be approved because Tier 1 never produced a sufficient statistical
+    conclusion; it must first be re-evaluated. Rejection remains available for
+    both flagged and pending rows as a disposal path.
+
+    Approval requires a completed suspicious statistical outcome, clears the
+    active anomaly flag, and preserves the original statistical outcome for
+    audit. It is refused when the stored report lacks a valid city because such a
+    report can never enter the pricing dataset. Rejection keeps the row for audit
+    but excludes it by status. Original anomaly evidence is not erased.
 
     The row is locked for the duration of the decision so two reviewers cannot
     apply conflicting transitions to the same report.
@@ -258,12 +298,18 @@ async def review_report(
         return None
 
     current_status = report.status
-    if current_status != REPORT_STATUS_FLAGGED:
+    if current_status not in {REPORT_STATUS_FLAGGED, REPORT_STATUS_PENDING_EVIDENCE}:
         await session.rollback()
         raise ReportReviewConflict(current_status)
 
     if status == REPORT_STATUS_ACCEPTED:
-        if not report.is_anomalous:
+        if current_status == REPORT_STATUS_PENDING_EVIDENCE:
+            await session.rollback()
+            raise ReportApprovalNotEligible(
+                "a pending-evidence report cannot be approved before a successful "
+                "Tier 1 re-evaluation"
+            )
+        if not report.is_anomalous or report.anomaly_outcome != "suspicious":
             await session.rollback()
             raise ReportApprovalNotEligible(
                 "the statistical anomaly check did not complete for this report"

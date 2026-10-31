@@ -50,7 +50,10 @@ def report_model(
     status: str = "flagged",
     is_anomalous: bool = True,
     city: str | None = "Multan",
+    anomaly_outcome: str | None = None,
 ) -> Report:
+    if anomaly_outcome is None:
+        anomaly_outcome = "suspicious" if is_anomalous else "pass"
     return Report(
         id=REPORT_ID,
         picker_id="picker_1",
@@ -65,6 +68,7 @@ def report_model(
         is_anomalous=is_anomalous,
         anomaly_reason="Price is a statistical outlier.",
         anomaly_method="mad",
+        anomaly_outcome=anomaly_outcome,
         status=status,
     )
 
@@ -108,7 +112,13 @@ async def test_approval_cannot_bypass_the_city_requirement() -> None:
 
 
 async def test_approval_cannot_bypass_an_incomplete_tier1_check() -> None:
-    session = FakeSession(report_model(status="flagged", is_anomalous=False))
+    session = FakeSession(
+        report_model(
+            status="flagged",
+            is_anomalous=False,
+            anomaly_outcome="unknown",
+        )
+    )
 
     with pytest.raises(ReportApprovalNotEligible) as raised:
         await review_report(
@@ -157,6 +167,54 @@ async def test_rejection_keeps_the_row_but_excludes_it_by_status() -> None:
     assert result.status == "rejected"
     assert result.is_anomalous is True
     assert result.reviewed_at is not None
+
+
+async def test_pending_evidence_cannot_be_approved() -> None:
+    session = FakeSession(
+        report_model(
+            status="pending_evidence",
+            is_anomalous=False,
+            anomaly_outcome="insufficient_evidence",
+        )
+    )
+
+    with pytest.raises(ReportApprovalNotEligible) as raised:
+        await review_report(
+            session,  # type: ignore[arg-type]
+            report_id=REPORT_ID,
+            reviewer_id="reviewer_1",
+            status="accepted",
+        )
+
+    assert "pending-evidence" in raised.value.reason
+    assert session.committed is False
+    assert session.rolled_back is True
+    assert session.report is not None
+    assert session.report.status == "pending_evidence"
+    assert session.report.reviewed_at is None
+
+
+async def test_pending_evidence_can_be_rejected_for_disposal() -> None:
+    session = FakeSession(
+        report_model(
+            status="pending_evidence",
+            is_anomalous=False,
+            anomaly_outcome="insufficient_evidence",
+        )
+    )
+
+    result = await review_report(
+        session,  # type: ignore[arg-type]
+        report_id=REPORT_ID,
+        reviewer_id="reviewer_1",
+        status="rejected",
+    )
+
+    assert result is not None
+    assert result.status == "rejected"
+    assert result.anomaly_outcome == "insufficient_evidence"
+    assert result.reviewed_by == "reviewer_1"
+    assert session.committed is True
 
 
 async def test_already_decided_reports_cannot_be_reviewed_again() -> None:

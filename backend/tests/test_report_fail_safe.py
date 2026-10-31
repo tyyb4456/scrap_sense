@@ -30,6 +30,39 @@ class _ExplodingSessionFactory:
         raise AssertionError("SessionLocal must not be opened for an incomplete check")
 
 
+class _CapturingSession:
+    def __init__(self, captured: list[Any]) -> None:
+        self.captured = captured
+
+    async def __aenter__(self) -> _CapturingSession:
+        return self
+
+    async def __aexit__(self, *_args: Any) -> bool:
+        return False
+
+    def add(self, report: Any) -> None:
+        self.captured.append(report)
+
+    async def commit(self) -> None:
+        return None
+
+    async def refresh(self, report: Any) -> None:
+        if report.id is None:
+            report.id = uuid.uuid4()
+        if report.created_at is None:
+            report.created_at = NOW
+        if report.updated_at is None:
+            report.updated_at = NOW
+
+
+class _CapturingSessionFactory:
+    def __init__(self, captured: list[Any]) -> None:
+        self.captured = captured
+
+    def __call__(self) -> _CapturingSession:
+        return _CapturingSession(self.captured)
+
+
 def _draft() -> ReportDraft:
     return ReportDraft(
         material="plastic",
@@ -74,23 +107,32 @@ async def test_save_report_refuses_unavailable_before_opening_a_session(
     assert raised.value.outcome == "unavailable"
 
 
-async def test_save_report_refuses_insufficient_evidence(
+async def test_save_report_persists_insufficient_evidence_as_pending(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(reports_module, "SessionLocal", _ExplodingSessionFactory())
+    captured: list[Any] = []
+    monkeypatch.setattr(
+        reports_module,
+        "SessionLocal",
+        _CapturingSessionFactory(captured),
+    )
 
-    with pytest.raises(ReportProcessingUnavailable) as raised:
-        await save_report(
-            picker_id="picker_1",
-            raw_text="sold 2kg plastic at 150 per kg in Multan",
-            draft=_draft(),
-            verdict=_verdict(
-                outcome="insufficient_evidence",
-                reason="Not enough comparable historical reports.",
-            ),
-        )
+    saved = await save_report(
+        picker_id="picker_1",
+        raw_text="sold 2kg plastic at 150 per kg in Multan",
+        draft=_draft(),
+        verdict=_verdict(
+            outcome="insufficient_evidence",
+            reason="Not enough comparable historical reports.",
+        ),
+    )
 
-    assert raised.value.outcome == "insufficient_evidence"
+    assert saved.status == "pending_evidence"
+    assert saved.is_anomalous is False
+    assert saved.anomaly_outcome == "insufficient_evidence"
+    assert len(captured) == 1
+    assert captured[0].status == "pending_evidence"
+    assert captured[0].raw_text == "sold 2kg plastic at 150 per kg in Multan"
 
 
 def _observation(

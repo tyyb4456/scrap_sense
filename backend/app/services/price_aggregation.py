@@ -20,7 +20,7 @@ from typing import cast
 from uuid import UUID
 
 from app.schemas.price import EvidenceQuality, GeographicScope, PriceEstimate
-from app.schemas.report import TIER1_COMPLETED_OUTCOMES
+from app.schemas.report import TRUSTED_OUTCOMES
 from app.services.materials import (
     material_aliases,
     material_label,
@@ -53,10 +53,11 @@ class PriceObservation:
     city: str | None
     area: str | None
     observed_at: datetime | None
+    anomaly_outcome: str
     status: str = "accepted"
     is_anomalous: bool = False
     unit: str = SUPPORTED_UNIT
-    anomaly_outcome: str = "pass"
+    reviewed_at: datetime | None = None
 
     @property
     def normalized_material(self) -> str | None:
@@ -120,6 +121,31 @@ def normalize_currency(value: str | None) -> str | None:
     return normalized
 
 
+def trusted_evidence_reason(observation: PriceObservation) -> str | None:
+    """Return why an observation is not trusted evidence, or ``None``.
+
+    Only a completed normal Tier 1 check is trusted automatically. A report that
+    was statistically suspicious may re-enter trusted evidence only after an
+    authorized reviewer explicitly approved it (``reviewed_at`` is set and the
+    active flag was cleared). Pending, unknown, unavailable, rejected, and
+    flagged observations never qualify.
+    """
+    if observation.status != "accepted":
+        return f"status:{observation.status}"
+    if observation.anomaly_outcome in TRUSTED_OUTCOMES:
+        if observation.is_anomalous:
+            return "flagged_anomalous"
+        return None
+    if (
+        observation.anomaly_outcome == "suspicious"
+        and observation.reviewed_at is not None
+    ):
+        if observation.is_anomalous:
+            return "flagged_anomalous"
+        return None
+    return f"anomaly_outcome:{observation.anomaly_outcome}"
+
+
 def eligibility_reason(
     observation: PriceObservation,
     *,
@@ -131,12 +157,9 @@ def eligibility_reason(
     report is treated as PKR/kg only when its currency matches the requested
     currency. No unit or currency conversion is attempted.
     """
-    if observation.status != "accepted":
-        return f"status:{observation.status}"
-    if observation.anomaly_outcome not in TIER1_COMPLETED_OUTCOMES:
-        return f"anomaly_outcome:{observation.anomaly_outcome}"
-    if observation.is_anomalous:
-        return "flagged_anomalous"
+    trust_reason = trusted_evidence_reason(observation)
+    if trust_reason is not None:
+        return trust_reason
     if normalize_city(observation.city) is None:
         return "missing_city"
     if observation.unit != SUPPORTED_UNIT:

@@ -104,7 +104,14 @@ def final_report(
         is_anomalous=result.is_anomalous,
         anomaly_reason=result.reason,
         anomaly_method=result.method,
-        status="flagged" if result.is_anomalous else "accepted",
+        anomaly_outcome=result.outcome,
+        status=(
+            "pending_evidence"
+            if result.outcome == "insufficient_evidence"
+            else "flagged"
+            if result.is_anomalous
+            else "accepted"
+        ),
         created_at=datetime.now(UTC),
     )
 
@@ -558,7 +565,7 @@ async def test_llm_tier_is_skipped_when_disabled(
     assert result["structured_response"].status == "flagged"
 
 
-async def test_insufficient_evidence_fails_safely_without_persistence(
+async def test_insufficient_evidence_is_persisted_as_pending_without_ml(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     captured: dict[str, Any] = {}
@@ -582,12 +589,12 @@ async def test_insufficient_evidence_fails_safely_without_persistence(
         {"configurable": {"thread_id": "user_123"}},
     )
 
-    assert captured == {}
-    assert result.get("final_report") is None
-    assert result.get("structured_response") is None
+    assert captured["verdict"].outcome == "insufficient_evidence"
+    assert result["structured_response"].status == "pending_evidence"
+    assert result["structured_response"].is_anomalous is False
     assert result["verdict"].outcome == "insufficient_evidence"
     assert result.get("ml_result") is None
-    assert "not saved" in result["messages"][-1].content.lower()
+    assert "pending evidence" in result["messages"][-1].content.lower()
     assert "accepted" not in result["messages"][-1].content.lower()
 
 

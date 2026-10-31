@@ -95,7 +95,7 @@ D:\scrap_sense\
 │   │   └── workflows\
 │   │       ├── pipeline.py           Intake + validation + anomaly tiers + persistence graph.
 │   │       └── state.py              PipelineState.
-│   └── tests\                        134 tests across 16 files, including real PostgreSQL integration.
+│   └── tests\                        188 tests across 19 files, including real PostgreSQL integration.
 │
 ├── frontend\
 │   ├── package.json                 React 19, TS, Vite 8, Clerk, Tailwind 4, oxlint. No test script.
@@ -304,7 +304,7 @@ Statuses are exactly one of **DONE**, **PARTIAL**, **NOT STARTED**, or **DIVERGE
 ### 5.3 Anomaly detection
 
 - **Purpose:** Decide whether a report is trustworthy before it affects prices.
-- **Tier 1 (deterministic):** `services/anomaly_detection.py` compares the candidate with accepted, non-anomalous reports sharing normalized material, currency, kg unit, and city. It prefers area evidence when the sample allows, uses median/MAD, and returns explicit `pass`, `suspicious`, `insufficient_evidence`, or `unavailable` outcomes.
+- **Tier 1 (deterministic):** `services/anomaly_detection.py` compares the candidate with trusted reports sharing normalized material, currency, kg unit, and city. It prefers area evidence when the sample allows, uses median/MAD, and returns explicit `pass`, `suspicious`, `insufficient_evidence`, or `unavailable` outcomes. Insufficient history persists the report as `pending_evidence` (excluded from pricing and baselines); `services/report_reevaluation.py` re-runs Tier 1 under a row lock on explicit request.
 - **Tier 2 (ML):** `services/ml_anomaly.py` exposes the feature contract (`log1p(price_per_kg)`, `log1p(quantity_kg)`), a readiness gate (report count, distinct materials, distinct cities), and a disabled/unavailable verdict. No model exists.
 - **Tier 3 (LLM):** `llm_check_node` is reached only for statistically suspicious reports and only when `USE_LLM_REASONING=true`. It uses schema-validated output and cannot clear the flag or override validation; timeouts and provider/malformed-output failures retain the statistical flag.
 - **Status:** a functioning trust layer for Tier 1 plus an optional Tier 3; Tier 2 remains deliberately dormant.
@@ -371,13 +371,13 @@ Statuses are exactly one of **DONE**, **PARTIAL**, **NOT STARTED**, or **DIVERGE
 
 ### 5.12 Operations / deployment
 
-- **Present:** `docker-compose.yml` for PostgreSQL 17; `.env.example`; Alembic migrations through `0003`; `uv.lock`.
+- **Present:** `docker-compose.yml` for PostgreSQL 17; `.env.example`; Alembic migrations through `0004`; `uv.lock`.
 - **Absent:** backend/frontend Dockerfiles, CI, production process config, reverse proxy, TLS, backup/retention jobs, observability/metrics, rate limiting.
-- **Live local DB:** Docker Compose reports the DB healthy; Alembic is at `0003_add_anomaly_review_fields (head)`.
+- **Live local DB:** Docker Compose reports the DB healthy; Alembic is at `0004_add_report_anomaly_outcome (head)`.
 
 ### 5.13 Tests
 
-- **Backend:** 134 tests; all pass. Coverage includes auth, validation, MAD behavior, ML readiness, graph routing, price aggregation, price API, reviewer actions, and real PostgreSQL price/review integration.
+- **Backend:** 188 tests; all pass. Coverage includes auth, validation, MAD behavior, cold-start pending evidence and re-evaluation, ML readiness, graph routing, price aggregation, price API, reviewer actions, and real PostgreSQL price/review integration.
 - **Frontend:** none.
 - **Not covered:** live model/provider calls, full agent → subagent → persistence routing, multi-turn clarification, retention, rate limiting, prompt injection, performance.
 - **Consequence:** the highest-risk remaining wiring gaps are coordinator routing and live provider behavior.
@@ -511,7 +511,7 @@ Per-file results:
 - User ownership boundaries: foreign thread read/append/delete returns 404; thread list is scoped.
 - Chat API failure modes: 422, 401, 503, 502.
 - Intake extraction fallback, validation, clarification, routing, all three anomaly-tier behaviors, accept/flag summaries, finalize persistence, and picker-id preference.
-- Median/MAD behavior, insufficient evidence, zero-MAD handling, and ML readiness.
+- Median/MAD behavior, insufficient evidence, pending-evidence persistence and exclusion, controlled re-evaluation, zero-MAD handling, and ML readiness.
 - Price eligibility, duplicate suppression, local → city → seed → unavailable fallback, seed-file parsing, price API validation/error handling, and real-PostgreSQL aggregation.
 - Reviewer authorization, pagination, approval/rejection transitions, conflicts, and real-PostgreSQL eligibility effects.
 - Health endpoints with healthy/unavailable DB fakes.

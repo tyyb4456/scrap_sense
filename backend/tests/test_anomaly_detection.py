@@ -33,6 +33,8 @@ def observation(
     status: str = "accepted",
     is_anomalous: bool = False,
     observed_at: datetime | None = None,
+    anomaly_outcome: str = "pass",
+    reviewed_at: datetime | None = None,
 ) -> PriceObservation:
     return PriceObservation(
         report_id=uuid.uuid4(),
@@ -47,6 +49,8 @@ def observation(
         status=status,
         is_anomalous=is_anomalous,
         unit=unit,
+        anomaly_outcome=anomaly_outcome,
+        reviewed_at=reviewed_at,
     )
 
 
@@ -196,6 +200,24 @@ def test_flagged_history_is_not_used_as_a_baseline() -> None:
         observation(price="100"),
     ]
     result = evaluate(flagged, price="100")
+
+    assert result.outcome == "insufficient_evidence"
+    assert result.sample_size == 0
+
+
+def test_pending_and_unknown_history_is_not_used_as_a_baseline() -> None:
+    untrusted = [
+        observation(
+            price="100",
+            status="pending_evidence",
+            anomaly_outcome="insufficient_evidence",
+        ),
+        observation(price="100", anomaly_outcome="unknown"),
+        observation(price="100", anomaly_outcome="unavailable"),
+        observation(price="100", status="rejected"),
+        observation(price="100", status="flagged", anomaly_outcome="suspicious"),
+    ]
+    result = evaluate(untrusted, price="100")
 
     assert result.outcome == "insufficient_evidence"
     assert result.sample_size == 0

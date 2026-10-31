@@ -485,6 +485,7 @@ async def test_cityless_flagged_report_cannot_be_approved(
                 is_anomalous=True,
                 anomaly_reason="Price is a statistical outlier.",
                 anomaly_method="mad",
+                anomaly_outcome="suspicious",
                 status="flagged",
             )
             session.add(cityless)

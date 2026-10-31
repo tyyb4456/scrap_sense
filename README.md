@@ -119,7 +119,8 @@ xKiro, an OpenAI-compatible gateway. Configure it with:
 Anomaly detection is configured with conservative defaults:
 
 - `ANOMALY_MIN_SAMPLE_SIZE` (default `5`) — fewer comparable reports returns
-  `insufficient_evidence`; the report is not saved and the picker is asked to retry.
+  `insufficient_evidence`; the report is saved as `pending_evidence`, excluded from pricing, and
+  can be re-evaluated later. The picker is told it is awaiting evidence.
 - `ANOMALY_MAX_OBSERVATION_AGE_DAYS` (default `90`) — only recent comparable reports are used.
 - `ANOMALY_MAX_COMPARISONS` (default `500`) — bound on rows read for one check.
 - `ANOMALY_MAD_Z_THRESHOLD` (default `3.5`) — modified z-score threshold.
@@ -266,10 +267,15 @@ the frontend only handles `401`/`403` responses.
 Statuses are the existing report lifecycle, not a second parallel state system:
 
 - `accepted` — passed deterministic validation and the mandatory Tier 1 anomaly check. It is
-  eligible for price aggregation. `reviewed_at` is null when the decision was automatic and set when
-  a reviewer approved it.
+  eligible for price aggregation only when its stored `anomaly_outcome` is `pass`, or when a
+  reviewer approved a `suspicious` result (which sets `reviewed_at`). `reviewed_at` is null when the
+  decision was automatic and set when a reviewer approved it.
 - `flagged` — statistically suspicious or awaiting review. It is persisted, never deleted, and
   excluded from price aggregation until a reviewer approves it.
+- `pending_evidence` — structurally valid but Tier 1 had too little comparable history. It is
+  persisted, never treated as a pass, and excluded from pricing and anomaly baselines until an
+  explicit re-evaluation with the same deterministic algorithm succeeds. A reviewer may reject it
+  for disposal but cannot approve it without re-evaluation.
 - `rejected` — a reviewer rejected it. It is retained for audit but never eligible.
 
 Deterministic validation runs before any anomaly tier and rejects missing fields, unsupported
@@ -278,15 +284,22 @@ inconsistent location fields, and implausible future timestamps. Invalid input r
 clarification question and does not reach the anomaly or LLM tiers. It is not saved as market
 evidence.
 
-Tier 1 compares only accepted, non-anomalous historical reports with the same normalized material,
-currency, unit (`kg`), and city. When an area has enough evidence it is preferred, otherwise the
-city is used. The check uses the median and median absolute deviation; a statistical outlier is
-marked `suspicious` for review, never labelled fraud or automatically rejected. Insufficient
-history produces an explicit `insufficient_evidence` result rather than an invented anomaly, and
-the report is not persisted. A database failure or unexpected comparison error returns
-`unavailable`; that is never converted into a normal result. In both cases the pipeline stops with
-a controlled retry message, so an unavailable check can never create an accepted or suspicious row
+Tier 1 compares only trusted historical reports with the same normalized material, currency, unit
+(`kg`), and city. A trusted report is accepted, non-anomalous, and either has a stored `pass`
+outcome or was a reviewer-approved `suspicious` report. When an area has enough evidence it is
+preferred, otherwise the city is used. The check uses the median and median absolute deviation; a
+statistical outlier is marked `suspicious` for review, never labelled fraud or automatically
+rejected. Insufficient history produces an explicit `insufficient_evidence` result rather than an
+invented anomaly, and the report is persisted as `pending_evidence` without contributing to
+pricing or future baselines. A database failure or unexpected comparison error returns
+`unavailable`; that is never converted into a normal result and the pipeline stops with a
+controlled retry message, so an unavailable check can never create an accepted or suspicious row
 or contribute to price aggregation.
+
+Pending reports are re-evaluated only explicitly, using `reevaluate_pending_report()` or
+`uv run python -m app.services.report_reevaluation` from `backend/`. Re-evaluation locks the row,
+reruns the same Tier 1 thresholds, and leaves the report pending if Tier 1 is still unavailable or
+still has insufficient evidence.
 
 Tier 2 (ML) is disabled because the repository contains no defensible training set. The interface
 and readiness rule live in `backend/app/services/ml_anomaly.py`. The documented gate is 200 accepted
@@ -316,7 +329,7 @@ npm run build
 
 The price and review integration tests run against the configured PostgreSQL database. Start it
 with `docker compose up -d db` and apply migrations with `uv run alembic upgrade head`; without a
-reachable database those tests skip instead of failing. The suite currently contains 134 tests.
+reachable database those tests skip instead of failing. The suite currently contains 188 tests.
 
 ## Known limitations
 

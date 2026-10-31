@@ -20,7 +20,7 @@ AnomalyOutcome = Literal[
     "error",
 ]
 
-ReportStatus = Literal["accepted", "flagged", "rejected"]
+ReportStatus = Literal["accepted", "flagged", "rejected", "pending_evidence"]
 
 
 class ReportDraft(BaseModel):
@@ -54,7 +54,7 @@ class ReportCreate(BaseModel):
 
 
 class ReportStatusUpdate(BaseModel):
-    status: Literal["accepted", "flagged", "rejected"]
+    status: Literal["accepted", "flagged", "rejected", "pending_evidence"]
 
 
 class ReportReviewRequest(BaseModel):
@@ -102,6 +102,7 @@ class ReportQueueItem(BaseModel):
         default=None,
         description="Extraction confidence recorded with the report, not an anomaly score.",
     )
+    anomaly_outcome: str = "unknown"
     reviewed_at: datetime | None = None
 
 
@@ -130,13 +131,19 @@ class ReportRead(BaseModel):
     area: str | None
     reported_at: datetime | None
     status: str
+    anomaly_outcome: str = "unknown"
     reviewed_at: datetime | None
     created_at: datetime
     updated_at: datetime
 
 
 class ReportSubmissionResponse(BaseModel):
-    status: Literal["accepted", "needs_clarification", "rejected"]
+    status: Literal[
+        "accepted",
+        "needs_clarification",
+        "rejected",
+        "pending_evidence",
+    ]
     report: ReportRead | None = None
     errors: list[str] = Field(default_factory=list)
     clarification_question: str | None = None
@@ -159,13 +166,18 @@ class AnomalyVerdict(BaseModel):
     reason: str
     method: str  # "validation" | "mad" | "ml" | "llm"
     confidence: float = Field(ge=0.0, le=1.0, default=1.0)
-    outcome: AnomalyOutcome = "pass"
+    outcome: AnomalyOutcome
     sample_size: int = Field(default=0, ge=0)
     median_price_per_kg: Decimal | None = None
     mad_price_per_kg: Decimal | None = None
 
 
 TIER1_COMPLETED_OUTCOMES: frozenset[str] = frozenset({"pass", "suspicious"})
+TIER1_INSUFFICIENT_OUTCOME = "insufficient_evidence"
+TIER1_UNAVAILABLE_OUTCOMES: frozenset[str] = frozenset(
+    {"unavailable", "error", "disabled"}
+)
+TRUSTED_OUTCOMES: frozenset[str] = frozenset({"pass"})
 
 
 def tier1_check_completed(verdict: AnomalyVerdict | None) -> bool:
@@ -176,6 +188,31 @@ def tier1_check_completed(verdict: AnomalyVerdict | None) -> bool:
     a missing verdict are not conclusions and must never be treated as normal.
     """
     return verdict is not None and verdict.outcome in TIER1_COMPLETED_OUTCOMES
+
+
+def tier1_check_insufficient(verdict: AnomalyVerdict | None) -> bool:
+    """Return whether Tier 1 ran successfully but lacked enough evidence."""
+    return (
+        verdict is not None
+        and verdict.outcome == TIER1_INSUFFICIENT_OUTCOME
+        and not verdict.is_anomalous
+    )
+
+
+def tier1_check_unavailable(verdict: AnomalyVerdict | None) -> bool:
+    """Return whether Tier 1 could not produce a reliable conclusion.
+
+    A missing verdict is treated as unavailable, never as normal or merely
+    insufficient. This keeps unexpected outcomes and infrastructure failures on
+    the retryable failure path.
+    """
+    if verdict is None:
+        return True
+    if verdict.outcome in TIER1_UNAVAILABLE_OUTCOMES:
+        return True
+    return verdict.outcome not in (
+        TIER1_COMPLETED_OUTCOMES | {TIER1_INSUFFICIENT_OUTCOME}
+    )
 
 
 class FinalReport(BaseModel):
@@ -197,7 +234,8 @@ class FinalReport(BaseModel):
     is_anomalous: bool
     anomaly_reason: str
     anomaly_method: str
-    status: Literal["accepted", "flagged", "rejected"]
+    status: Literal["accepted", "flagged", "rejected", "pending_evidence"]
+    anomaly_outcome: str = "unknown"
     reviewed_at: datetime | None = None
     created_at: datetime
 

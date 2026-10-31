@@ -51,6 +51,7 @@ def report(
     status: str = "accepted",
     is_anomalous: bool = False,
     observed_at: datetime | None = None,
+    anomaly_outcome: str = "pass",
 ) -> Report:
     return Report(
         picker_id=picker_id,
@@ -70,6 +71,7 @@ def report(
             else "No anomaly detected."
         ),
         anomaly_method="mad",
+        anomaly_outcome=anomaly_outcome,
         status=status,
         created_at=created_at,
     )

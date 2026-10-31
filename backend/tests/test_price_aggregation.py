@@ -30,6 +30,8 @@ def observation(
     status: str = "accepted",
     is_anomalous: bool = False,
     quantity: str | None = "2",
+    anomaly_outcome: str = "pass",
+    reviewed_at: datetime | None = None,
 ) -> PriceObservation:
     return PriceObservation(
         report_id=uuid.uuid4(),
@@ -44,6 +46,8 @@ def observation(
         status=status,
         is_anomalous=is_anomalous,
         unit=unit,
+        anomaly_outcome=anomaly_outcome,
+        reviewed_at=reviewed_at,
     )
 
 
@@ -361,6 +365,44 @@ def test_flagged_and_rejected_reports_are_ineligible() -> None:
     assert evaluation.excluded["status:flagged"] == 1
     assert evaluation.excluded["status:rejected"] == 1
     assert evaluation.excluded["flagged_anomalous"] == 1
+
+
+def test_unverified_outcomes_are_ineligible_for_pricing() -> None:
+    assert (
+        eligibility_reason(observation(anomaly_outcome="unknown"))
+        == "anomaly_outcome:unknown"
+    )
+    assert (
+        eligibility_reason(
+            observation(
+                status="pending_evidence",
+                anomaly_outcome="insufficient_evidence",
+            )
+        )
+        == "status:pending_evidence"
+    )
+    assert (
+        eligibility_reason(observation(anomaly_outcome="insufficient_evidence"))
+        == "anomaly_outcome:insufficient_evidence"
+    )
+    assert (
+        eligibility_reason(observation(anomaly_outcome="unavailable"))
+        == "anomaly_outcome:unavailable"
+    )
+
+
+def test_reviewer_approved_suspicious_observation_remains_eligible() -> None:
+    approved = observation(
+        anomaly_outcome="suspicious",
+        is_anomalous=False,
+        reviewed_at=NOW,
+    )
+
+    assert eligibility_reason(approved) is None
+
+    result = evaluate([approved, observation(price="200"), observation(price="300")]).estimate
+    assert result.source == "local_reports"
+    assert result.observation_count == 3
 
 
 def test_outliers_are_not_removed() -> None:

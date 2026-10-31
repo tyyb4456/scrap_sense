@@ -109,7 +109,14 @@ def patch_save_report(
             is_anomalous=verdict.is_anomalous,
             anomaly_reason=verdict.reason,
             anomaly_method=verdict.method,
-            status="flagged" if verdict.is_anomalous else "accepted",
+            anomaly_outcome=verdict.outcome,
+            status=(
+                "pending_evidence"
+                if verdict.outcome == "insufficient_evidence"
+                else "flagged"
+                if verdict.is_anomalous
+                else "accepted"
+            ),
             created_at=datetime.now(UTC),
         )
 

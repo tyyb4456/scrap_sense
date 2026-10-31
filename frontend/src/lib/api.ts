@@ -157,7 +157,7 @@ export function getPriceEstimate(
   return request<PriceEstimate>(`/prices/estimate?${params.toString()}`, token)
 }
 
-export type ReportStatus = 'accepted' | 'flagged' | 'rejected'
+export type ReportStatus = 'accepted' | 'flagged' | 'rejected' | 'pending_evidence'
 export type ReportReviewDecision = 'accepted' | 'rejected'
 
 export interface ReportQueueItem {
@@ -175,6 +175,7 @@ export interface ReportQueueItem {
   is_anomalous: boolean
   anomaly_method: string
   anomaly_reason: string
+  anomaly_outcome: string
   confidence: number | null
   reviewed_at: string | null
 }

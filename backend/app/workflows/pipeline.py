@@ -23,10 +23,12 @@ Execution path:
                                  llm_check -----------------+          v
                                                                      END
 
-Tier 1 (median/MAD) is deterministic and mandatory. A report is never persisted
+Tier 1 (median/MAD) is deterministic and mandatory. A report is never accepted
 unless Tier 1 produced a usable conclusion (`pass` or `suspicious`). When the
-comparison is unavailable, errors, or lacks sufficient evidence, the pipeline
-stops with a controlled retry message instead of accepting the report.
+comparison succeeds but lacks sufficient evidence, the report is persisted as
+`pending_evidence` for controlled evidence accumulation and never contributes to
+prices or trusted baselines. When the comparison is unavailable or errors, the
+pipeline stops with a controlled retry message and persists nothing.
 
 Tier 2 (ML) is disabled until a trained, evaluated artifact and enough real data
 exist. Tier 3 (LLM) is reached only for statistically suspicious reports and
@@ -52,6 +54,8 @@ from app.schemas.report import (
     LLMJudgment,
     ReportDraft,
     tier1_check_completed,
+    tier1_check_insufficient,
+    tier1_check_unavailable,
 )
 from app.services.anomaly_detection import evaluate_report_statistical
 from app.services.ml_anomaly import evaluate_ml_check
@@ -142,7 +146,7 @@ def _judge_model():
 def _neutral_verdict(
     method: str,
     *,
-    outcome: AnomalyOutcome = "pass",
+    outcome: AnomalyOutcome = "unavailable",
 ) -> AnomalyVerdict:
     return AnomalyVerdict(
         is_anomalous=False,
@@ -503,6 +507,22 @@ def accept_node(state: PipelineState) -> dict[str, Any]:
     }
 
 
+def pending_evidence_node(state: PipelineState) -> dict[str, Any]:
+    """Continue to controlled unverified intake after an inconclusive Tier 1."""
+    verdict = _resolve_verdict(state)
+    if not tier1_check_insufficient(verdict):
+        logger.warning(
+            "Pending-evidence route received a non-insufficient outcome (%s)",
+            verdict.outcome,
+        )
+        return {
+            "verdict": verdict,
+            "messages": [AIMessage(content=PROCESSING_UNAVAILABLE_MESSAGE)],
+        }
+    logger.info("Report will be saved as pending evidence: %s", verdict.reason)
+    return {"verdict": verdict}
+
+
 def processing_unavailable_node(state: PipelineState) -> dict[str, Any]:
     """Stop without persisting when the mandatory Tier 1 check did not complete."""
     verdict = _resolve_verdict(state)
@@ -529,7 +549,7 @@ async def finalize_report_node(
         }
 
     verdict = _resolve_verdict(state)
-    if not tier1_check_completed(verdict):
+    if not (tier1_check_completed(verdict) or tier1_check_insufficient(verdict)):
         logger.warning(
             "Refusing to persist a report whose Tier 1 check did not complete "
             "(outcome=%s)",
@@ -582,7 +602,13 @@ async def finalize_report_node(
         f"{final_report.quantity_kg} kg at "
         f"{final_report.price_per_kg} {final_report.currency}/kg."
     )
-    if final_report.is_anomalous:
+    if final_report.status == "pending_evidence":
+        summary = (
+            f"{summary} It was saved as pending evidence because there is not "
+            "enough comparable history yet; it will not affect prices until a "
+            "later re-evaluation confirms it."
+        )
+    elif final_report.is_anomalous:
         summary = f"{summary} It is excluded from price estimates pending review."
 
     logger.info("Saved final report %s for picker %s", final_report.id, picker_id)
@@ -595,7 +621,11 @@ async def finalize_report_node(
 
 
 def route_after_deterministic(state: PipelineState) -> str:
-    if not _tier1_completed(state):
+    verdict = state.get("deterministic_result")
+    if tier1_check_insufficient(verdict):
+        logger.info("Routing after deterministic check -> 'pending_evidence'")
+        return "pending_evidence"
+    if tier1_check_unavailable(verdict) or not _tier1_completed(state):
         logger.warning("Routing after deterministic check -> 'processing_unavailable'")
         return "processing_unavailable"
     return "ml_check"
@@ -620,6 +650,7 @@ def build_pipeline():
     graph.add_node("ml_check", ml_check_node)
     graph.add_node("llm_check", llm_check_node)
     graph.add_node("accept", accept_node)
+    graph.add_node("pending_evidence", pending_evidence_node)
     graph.add_node("finalize_report", finalize_report_node)
     graph.add_node("processing_unavailable", processing_unavailable_node)
 
@@ -636,6 +667,7 @@ def build_pipeline():
         route_after_deterministic,
         {
             "ml_check": "ml_check",
+            "pending_evidence": "pending_evidence",
             "processing_unavailable": "processing_unavailable",
         },
     )
@@ -650,6 +682,7 @@ def build_pipeline():
     )
     graph.add_edge("llm_check", "accept")
     graph.add_edge("accept", "finalize_report")
+    graph.add_edge("pending_evidence", "finalize_report")
     graph.add_edge("finalize_report", END)
     graph.add_edge("processing_unavailable", END)
 

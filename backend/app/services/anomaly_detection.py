@@ -15,6 +15,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.core.config import Settings
 from app.schemas.report import AnomalyVerdict, ReportDraft
 from app.services.materials import material_aliases, normalize_material, normalize_text
@@ -23,6 +25,7 @@ from app.services.price_aggregation import (
     as_utc,
     median_decimal,
     normalize_currency,
+    trusted_evidence_reason,
 )
 from app.services.reports import fetch_comparable_reports
 
@@ -82,7 +85,7 @@ def _comparable_observations(
     comparable: list[PriceObservation] = []
 
     for observation in observations:
-        if observation.status != "accepted" or observation.is_anomalous:
+        if trusted_evidence_reason(observation) is not None:
             continue
         if observation.unit != "kg":
             continue
@@ -254,21 +257,19 @@ def evaluate_statistical_anomaly(
     )
 
 
-async def evaluate_report_statistical(
+async def evaluate_report_statistical_with_session(
     draft: ReportDraft,
     *,
+    session: AsyncSession,
     settings: Settings,
     now: datetime | None = None,
 ) -> AnomalyVerdict:
-    """Load comparable reports from PostgreSQL and run the Tier 1 check.
+    """Run Tier 1 using a caller-owned database session.
 
-    Database failures are returned as an explicit ``unavailable`` outcome so the
-    graph can stop safely instead of crashing or pretending a check passed. The
-    pipeline treats ``unavailable`` and ``insufficient_evidence`` as incomplete
-    and does not persist the report.
+    This is the shared implementation for normal intake and controlled
+    re-evaluation. Database or unexpected failures return ``unavailable``; they
+    are never converted into ``insufficient_evidence``.
     """
-    from app.db.session import SessionLocal  # local import keeps pure tests DB-free
-
     evaluated_at = as_utc(now or datetime.now(UTC))
     policy = policy_from_settings(settings)
 
@@ -278,16 +279,14 @@ async def evaluate_report_statistical(
         )
 
     try:
-        async with SessionLocal() as session:
-            reports = await fetch_comparable_reports(
-                session,
-                material_aliases=set(material_aliases(draft.material)),
-                city=normalize_text(draft.city) or "",
-                currency=normalize_currency(draft.currency) or "",
-                since=evaluated_at
-                - timedelta(days=policy.max_observation_age_days),
-                limit=settings.anomaly_max_comparisons,
-            )
+        reports = await fetch_comparable_reports(
+            session,
+            material_aliases=set(material_aliases(draft.material)),
+            city=normalize_text(draft.city) or "",
+            currency=normalize_currency(draft.currency) or "",
+            since=evaluated_at - timedelta(days=policy.max_observation_age_days),
+            limit=settings.anomaly_max_comparisons,
+        )
     except Exception:
         logger.exception("Deterministic anomaly comparison failed")
         return AnomalyVerdict(
@@ -312,6 +311,8 @@ async def evaluate_report_statistical(
             status=report.status,
             is_anomalous=report.is_anomalous,
             unit="kg",
+            anomaly_outcome=report.anomaly_outcome,
+            reviewed_at=report.reviewed_at,
         )
         for report in reports
     ]
@@ -327,3 +328,37 @@ async def evaluate_report_statistical(
         now=evaluated_at,
         policy=policy,
     )
+
+
+async def evaluate_report_statistical(
+    draft: ReportDraft,
+    *,
+    settings: Settings,
+    now: datetime | None = None,
+) -> AnomalyVerdict:
+    """Load comparable reports from PostgreSQL and run the Tier 1 check.
+
+    Database failures are returned as an explicit ``unavailable`` outcome so the
+    graph can stop safely instead of crashing or pretending a check passed. A
+    successful check with too little history returns ``insufficient_evidence``,
+    which the pipeline persists as controlled unverified intake.
+    """
+    from app.db.session import SessionLocal  # local import keeps pure tests DB-free
+
+    try:
+        async with SessionLocal() as session:
+            return await evaluate_report_statistical_with_session(
+                draft,
+                session=session,
+                settings=settings,
+                now=now,
+            )
+    except Exception:
+        logger.exception("Deterministic anomaly comparison failed")
+        return AnomalyVerdict(
+            is_anomalous=False,
+            reason="Historical comparison was unavailable; no anomaly conclusion was drawn.",
+            method="mad",
+            confidence=0.0,
+            outcome="unavailable",
+        )

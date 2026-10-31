@@ -49,6 +49,13 @@ class Report(Base):
     )
     anomaly_reason: Mapped[str] = mapped_column(Text, nullable=False)
     anomaly_method: Mapped[str] = mapped_column(String(20), nullable=False)
+    anomaly_outcome: Mapped[str] = mapped_column(
+        String(30),
+        nullable=False,
+        default="unknown",
+        server_default="unknown",
+        index=True,
+    )
     status: Mapped[str] = mapped_column(
         String(20), nullable=False, default="accepted", server_default="accepted", index=True
     )
